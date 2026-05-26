@@ -93,10 +93,15 @@ def local_css() -> None:
         <style>
         :root {
             --brand-blue: #12355b;
+            --brand-blue-soft: #e8f0f8;
             --ink: #17202a;
             --muted: #667085;
             --line: #d7dee8;
             --soft: #f6f8fb;
+            --surface: #fbfcfe;
+        }
+        .stApp {
+            background: #f7f9fc;
         }
         .main .block-container {
             padding-top: 1.4rem;
@@ -107,7 +112,7 @@ def local_css() -> None:
             letter-spacing: 0;
         }
         div[data-testid="stMetric"] {
-            background: #fbfcfe;
+            background: var(--surface);
             border: 1px solid var(--line);
             border-radius: 8px;
             padding: 14px 16px;
@@ -119,10 +124,10 @@ def local_css() -> None:
         div.stButton > button {
             border-radius: 6px;
             border: 1px solid #c8d2df;
-            background: #fbfcfe;
+            background: var(--surface);
             color: #1f2a37;
             font-weight: 600;
-            min-height: 36px;
+            min-height: 34px;
             white-space: normal;
             line-height: 1.15;
         }
@@ -130,6 +135,12 @@ def local_css() -> None:
             border-color: #12355b;
             color: #12355b;
             background: #f2f6fb;
+        }
+        .stButton button[kind="secondary"] {
+            padding: 0.2rem 0.65rem;
+            min-height: 32px;
+            font-size: 0.84rem;
+            border-radius: 999px;
         }
         .section-caption, .source-note, .filter-summary {
             color: var(--muted);
@@ -143,7 +154,7 @@ def local_css() -> None:
             background: var(--soft);
             border: 1px solid var(--line);
             border-radius: 8px;
-            padding: 0.72rem 0.9rem;
+            padding: 0.68rem 0.86rem;
             margin-bottom: 1rem;
         }
         .filter-summary b {
@@ -157,12 +168,22 @@ def local_css() -> None:
             font-size: 0.94rem;
             font-weight: 800;
             letter-spacing: 0;
-            margin: 1.05rem 0 0.35rem 0;
+            margin: 1.15rem 0 0.28rem 0;
         }
         .filter-help {
             color: var(--muted);
             font-size: 0.8rem;
-            margin: -0.1rem 0 0.45rem 0;
+            margin: -0.1rem 0 0.36rem 0;
+        }
+        .instruction-card {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 1rem 1.1rem;
+            color: var(--ink);
+            font-weight: 650;
+            margin-top: 0.75rem;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
         }
         div[data-testid="stElementToolbar"] {
             display: none;
@@ -170,13 +191,42 @@ def local_css() -> None:
         div[data-testid="stHorizontalBlock"] {
             gap: 0.75rem;
         }
+        div[data-baseweb="button-group"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: 0.38rem !important;
+            align-items: center !important;
+        }
         [data-testid="stBaseButton-pills"],
         [data-testid="stBaseButton-secondary"],
         [data-testid="stBaseButton-primary"] {
-            min-height: 42px;
+            min-height: 34px;
             border-radius: 999px;
             white-space: normal;
             line-height: 1.15;
+            padding: 0.24rem 0.7rem;
+            font-size: 0.86rem;
+            flex: 0 0 auto !important;
+            width: auto !important;
+            max-width: 14rem;
+        }
+        [data-testid="stBaseButton-pills"] {
+            background: var(--surface);
+            border: 1px solid #ccd6e2;
+            color: #344054;
+        }
+        [data-testid="stBaseButton-pills"]:hover {
+            background: #eef4fb;
+            border-color: #8ea7c2;
+            color: var(--brand-blue);
+        }
+        [data-testid="stBaseButton-pills"][aria-pressed="true"],
+        [data-testid="stBaseButton-pillsActive"],
+        button[aria-pressed="true"] {
+            background: var(--brand-blue-soft) !important;
+            border-color: #42698f !important;
+            color: var(--brand-blue) !important;
+            box-shadow: inset 0 0 0 1px rgba(18, 53, 91, 0.12);
         }
         @media (max-width: 700px) {
             .main .block-container {
@@ -196,8 +246,8 @@ def local_css() -> None:
             [data-testid="stBaseButton-pills"],
             [data-testid="stBaseButton-secondary"],
             [data-testid="stBaseButton-primary"] {
-                min-height: 44px;
-                font-size: 0.92rem;
+                min-height: 40px;
+                font-size: 0.88rem;
                 padding-left: 0.75rem;
                 padding-right: 0.75rem;
             }
@@ -384,18 +434,18 @@ def render_pill_selector(
 ) -> None:
     st.markdown(f'<div class="filter-heading">{title}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="filter-help">{help_text}</div>', unsafe_allow_html=True)
-    control_left, control_right = st.columns(2)
+    control_left, control_right, _ = st.columns([0.16, 0.16, 0.68])
     control_left.button(
         "Select All",
         key=f"{key_prefix}_all",
-        width="stretch",
+        width="content",
         on_click=set_items,
         args=(state_key, options),
     )
     control_right.button(
         "Clear All",
         key=f"{key_prefix}_clear",
-        width="stretch",
+        width="content",
         on_click=set_items,
         args=(state_key, []),
     )
@@ -487,8 +537,10 @@ category_options = [
 ]
 category_options_signature = "|".join(category_options)
 if st.session_state["last_category_options_signature"] != category_options_signature:
-    reset_category_state(category_options)
+    st.session_state["selected_categories"] = []
+    st.session_state["selected_sizes"] = []
     st.session_state["last_category_options_signature"] = category_options_signature
+    st.session_state["last_category_signature"] = ""
 
 st.session_state["selected_categories"] = [
     category for category in st.session_state["selected_categories"] if category in category_options
@@ -503,10 +555,16 @@ render_pill_selector(
 )
 
 selected_categories = st.session_state["selected_categories"]
-if selected_categories:
-    category_df = df[df["Category"].isin(selected_categories)]
-else:
-    category_df = df.iloc[0:0]
+if not selected_categories:
+    st.session_state["selected_sizes"] = []
+    st.session_state["last_category_signature"] = ""
+    st.markdown(
+        '<div class="instruction-card">Please choose at least one Category to start portfolio analysis.</div>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+category_df = df[df["Category"].isin(selected_categories)]
 
 available_sizes = sorted(category_df["Size"].dropna().unique().tolist())
 category_signature = "|".join(selected_categories) + "::" + "|".join(available_sizes)
@@ -527,11 +585,26 @@ render_pill_selector(
 )
 selected_sizes = st.session_state["selected_sizes"]
 
+if not selected_sizes:
+    selected_category_label = summarize_categories(selected_categories, category_options)
+    st.markdown(
+        (
+            '<div class="filter-summary">'
+            f"<b>Selected:</b> {selected_category_label} &nbsp;&nbsp; "
+            "<b>Sizes:</b> None &nbsp;&nbsp; "
+            "<b>SKU Count:</b> 0"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="instruction-card">Please choose at least one Size to display the chart.</div>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
 filtered = category_df.copy()
-if selected_sizes:
-    filtered = filtered[filtered["Size"].isin(selected_sizes)]
-else:
-    filtered = filtered.iloc[0:0]
+filtered = filtered[filtered["Size"].isin(selected_sizes)]
 if search_term:
     filtered = filtered[
         filtered["Flavor Description"].str.contains(search_term, case=False, na=False)
@@ -539,14 +612,15 @@ if search_term:
 
 with st.sidebar:
     st.caption(f"Selected SKU count: {len(filtered):,}")
-    export_csv = filtered.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "Export filtered data",
-        data=export_csv,
-        file_name="sales_gp_filtered_data.csv",
-        mime="text/csv",
-        width="stretch",
-    )
+    if not filtered.empty:
+        export_csv = filtered.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "Export filtered data",
+            data=export_csv,
+            file_name="sales_gp_filtered_data.csv",
+            mime="text/csv",
+            width="stretch",
+        )
 
 selected_category_label = summarize_categories(selected_categories, category_options)
 st.markdown(
@@ -560,6 +634,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if filtered.empty:
+    st.info("No SKUs match the current category, size, and search filters.")
+    st.stop()
+
 total_sales = filtered["Net Value 6M"].sum() if not filtered.empty else 0
 average_gp = filtered["GP%"].mean() if not filtered.empty else pd.NA
 sku_count = len(filtered)
@@ -569,10 +647,6 @@ kpi_1.metric("Total Sales Value", format_money(total_sales))
 kpi_2.metric("Average GP%", "-" if pd.isna(average_gp) else f"{average_gp:.1%}")
 kpi_3.metric("Number of SKUs", f"{sku_count:,}")
 kpi_4.metric("Selected Category", selected_category_label)
-
-if filtered.empty:
-    st.info("No SKUs match the current category, size, and search filters.")
-    st.stop()
 
 avg_sales = filtered["Net Value 6M"].mean()
 avg_gp = filtered["GP%"].mean()
