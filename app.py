@@ -469,11 +469,18 @@ def reset_category_state(available_categories: list[str]) -> None:
 
 
 def reset_size_state(available_sizes: list[str]) -> None:
-    st.session_state["selected_sizes"] = available_sizes.copy()
+    st.session_state["selected_sizes"] = []
 
 
 def set_items(state_key: str, items: list[str]) -> None:
     st.session_state[state_key] = items.copy()
+
+
+def shorten_label(value: object, max_chars: int = 26) -> str:
+    text = " ".join(str(value).split())
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3].rstrip()}..."
 
 
 def render_pill_selector(
@@ -829,20 +836,43 @@ st.markdown(
 )
 st.plotly_chart(fig, width="stretch", config={"displaylogo": False, "scrollZoom": True})
 
+st.markdown('<div class="chart-section-title">Sales Rank vs GP%</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="chart-section-note">Ranked bar and margin marker view. Choose how many SKUs to show, or scroll horizontally for the full portfolio.</div>',
+    unsafe_allow_html=True,
+)
+
+rank_view = st.pills(
+    "Ranked SKU count",
+    ["Top 10", "Top 20", "Top 30", "All"],
+    default="Top 10",
+    selection_mode="single",
+    label_visibility="collapsed",
+    width="content",
+)
+rank_view = rank_view or "Top 10"
+rank_limits = {"Top 10": 10, "Top 20": 20, "Top 30": 30}
+rank_limit = rank_limits.get(rank_view)
+
 ranked = filtered.sort_values("Net Value 6M", ascending=False).reset_index(drop=True).copy()
-ranked["Rank Label"] = [
-    f"{index + 1}. {name}" for index, name in enumerate(ranked["Flavor Description"].astype(str).tolist())
+if rank_limit is not None:
+    ranked = ranked.head(rank_limit).copy()
+ranked["Display Label"] = [
+    f"{index + 1}. {shorten_label(name)}"
+    for index, name in enumerate(ranked["Flavor Description"].astype(str).tolist())
 ]
-rank_width = max(960, min(5200, 52 * len(ranked)))
+ranked["Bar Width"] = 0.38
+rank_width = max(760, min(4600, 74 * len(ranked)))
 
 rank_fig = make_subplots(specs=[[{"secondary_y": True}]])
 rank_fig.add_trace(
     go.Bar(
-        x=ranked["Rank Label"],
+        x=ranked["Display Label"],
         y=ranked["Net Value 6M"],
-        name="Sales Value",
-        marker=dict(color="#42698f", line=dict(color="#31506f", width=0.4)),
-        opacity=0.86,
+        name="Sales",
+        width=ranked["Bar Width"],
+        marker=dict(color="#8fb3d1", line=dict(color="rgba(66, 105, 143, 0.16)", width=0.5)),
+        opacity=0.76,
         customdata=ranked[["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]],
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
@@ -856,12 +886,12 @@ rank_fig.add_trace(
 )
 rank_fig.add_trace(
     go.Scatter(
-        x=ranked["Rank Label"],
+        x=ranked["Display Label"],
         y=ranked["GP%"],
         name="GP%",
         mode="lines+markers",
-        line=dict(color="#17a589", width=2),
-        marker=dict(size=7, color="#17a589", line=dict(color="#fbfcfe", width=1)),
+        line=dict(color="#238f7d", width=2),
+        marker=dict(size=7, color="#238f7d", line=dict(color="#fbfcfe", width=1.2)),
         customdata=ranked[["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]],
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
@@ -874,20 +904,20 @@ rank_fig.add_trace(
     secondary_y=True,
 )
 rank_fig.update_layout(
-    title=dict(text="Sales Rank vs GP%", font=dict(size=21, color="#17202a")),
     width=rank_width,
-    height=560,
-    margin=dict(l=58, r=64, t=70, b=150),
+    height=520,
+    margin=dict(l=92, r=88, t=34, b=118),
     plot_bgcolor="#fbfcfe",
     paper_bgcolor="#fbfcfe",
     hovermode="x unified",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    bargap=0.22,
+    bargap=0.58,
+    bargroupgap=0.20,
 )
 rank_fig.update_xaxes(
-    title="SKU / Flavor / Product Name, sorted by Sales Value",
-    tickangle=-45,
-    tickfont=dict(size=10),
+    title="SKU rank, sales high to low",
+    tickangle=-30 if len(ranked) > 10 else 0,
+    tickfont=dict(size=10, color="#4b5563"),
     showgrid=False,
     automargin=True,
 )
@@ -897,6 +927,8 @@ rank_fig.update_yaxes(
     showgrid=True,
     gridcolor="#e6ebf2",
     zeroline=False,
+    title_standoff=14,
+    tickfont=dict(color="#4b5563"),
     secondary_y=False,
 )
 rank_fig.update_yaxes(
@@ -904,15 +936,11 @@ rank_fig.update_yaxes(
     tickformat=".0%",
     showgrid=False,
     zeroline=False,
+    title_standoff=12,
+    tickfont=dict(color="#4b5563"),
     secondary_y=True,
 )
-
-st.markdown('<div class="chart-section-title">Sales Rank vs GP%</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="chart-section-note">Ranked bar and margin marker view. Scroll horizontally when the selected portfolio has many SKUs.</div>',
-    unsafe_allow_html=True,
-)
-render_scrolling_plotly_chart(rank_fig, height=590)
+render_scrolling_plotly_chart(rank_fig, height=550)
 
 with st.expander("Filtered SKU data", expanded=False):
     display = filtered.copy()
