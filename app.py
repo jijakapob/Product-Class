@@ -3,7 +3,10 @@ import re
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
+from plotly.subplots import make_subplots
 
 
 APP_TITLE = "Sales vs GP% Portfolio Dashboard"
@@ -175,6 +178,15 @@ def local_css() -> None:
             font-size: 0.8rem;
             margin: -0.1rem 0 0.36rem 0;
         }
+        .filter-disabled {
+            color: #8a97a8;
+            background: #eef2f6;
+            border: 1px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 0.72rem 0.86rem;
+            font-size: 0.9rem;
+            margin-top: 0.35rem;
+        }
         .instruction-card {
             background: var(--surface);
             border: 1px solid var(--line);
@@ -190,6 +202,18 @@ def local_css() -> None:
         }
         div[data-testid="stHorizontalBlock"] {
             gap: 0.75rem;
+        }
+        .chart-section-title {
+            color: var(--ink);
+            font-size: 1.12rem;
+            font-weight: 760;
+            letter-spacing: 0;
+            margin: 1.1rem 0 0.15rem 0;
+        }
+        .chart-section-note {
+            color: var(--muted);
+            font-size: 0.86rem;
+            margin-bottom: 0.45rem;
         }
         div[data-baseweb="button-group"] {
             display: flex !important;
@@ -486,6 +510,24 @@ def render_pill_selector(
     )
 
 
+def render_disabled_step(title: str, message: str) -> None:
+    st.markdown(f'<div class="filter-heading">{title}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="filter-disabled">{message}</div>', unsafe_allow_html=True)
+
+
+def render_scrolling_plotly_chart(fig: go.Figure, height: int) -> None:
+    html = fig.to_html(include_plotlyjs=True, full_html=False, config={"displaylogo": False, "scrollZoom": True})
+    components.html(
+        f"""
+        <div style="width:100%; overflow-x:auto; overflow-y:hidden; padding-bottom:4px;">
+          {html}
+        </div>
+        """,
+        height=height,
+        scrolling=False,
+    )
+
+
 local_css()
 
 if "selected_categories" not in st.session_state:
@@ -574,7 +616,7 @@ st.session_state["selected_categories"] = [
 ]
 
 render_pill_selector(
-    "CHOOSE CATEGORY",
+    "STEP 1 — Choose Category",
     "Select one or more portfolio categories.",
     category_options,
     "selected_categories",
@@ -585,8 +627,9 @@ selected_categories = st.session_state["selected_categories"]
 if not selected_categories:
     st.session_state["selected_sizes"] = []
     st.session_state["last_category_signature"] = ""
+    render_disabled_step("STEP 2 — Choose Size", "Choose at least one category first. Size options will appear here.")
     st.markdown(
-        '<div class="instruction-card">Please choose at least one Category to start portfolio analysis.</div>',
+        '<div class="instruction-card">Select a category to begin analysis.</div>',
         unsafe_allow_html=True,
     )
     st.stop()
@@ -604,7 +647,7 @@ st.session_state["selected_sizes"] = [
 ]
 
 render_pill_selector(
-    "CHOOSE SIZE",
+    "STEP 2 — Choose Size",
     "Only sizes available in the selected categories are shown.",
     available_sizes,
     "selected_sizes",
@@ -779,7 +822,97 @@ fig.update_yaxes(
     range=[max(y_min - y_padding, -1), min(y_max + y_padding, 1.5)],
 )
 
+st.markdown('<div class="chart-section-title">Sales vs GP% Portfolio Map</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="chart-section-note">Bubble view for quadrant review: sales scale, margin quality, and category mix.</div>',
+    unsafe_allow_html=True,
+)
 st.plotly_chart(fig, width="stretch", config={"displaylogo": False, "scrollZoom": True})
+
+ranked = filtered.sort_values("Net Value 6M", ascending=False).reset_index(drop=True).copy()
+ranked["Rank Label"] = [
+    f"{index + 1}. {name}" for index, name in enumerate(ranked["Flavor Description"].astype(str).tolist())
+]
+rank_width = max(960, min(5200, 52 * len(ranked)))
+
+rank_fig = make_subplots(specs=[[{"secondary_y": True}]])
+rank_fig.add_trace(
+    go.Bar(
+        x=ranked["Rank Label"],
+        y=ranked["Net Value 6M"],
+        name="Sales Value",
+        marker=dict(color="#42698f", line=dict(color="#31506f", width=0.4)),
+        opacity=0.86,
+        customdata=ranked[["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]],
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "Size: %{customdata[1]}<br>"
+            "Category: %{customdata[2]}<br>"
+            "Sales: %{customdata[3]:,.0f}<br>"
+            "GP%: %{customdata[4]:.1%}<extra></extra>"
+        ),
+    ),
+    secondary_y=False,
+)
+rank_fig.add_trace(
+    go.Scatter(
+        x=ranked["Rank Label"],
+        y=ranked["GP%"],
+        name="GP%",
+        mode="lines+markers",
+        line=dict(color="#17a589", width=2),
+        marker=dict(size=7, color="#17a589", line=dict(color="#fbfcfe", width=1)),
+        customdata=ranked[["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]],
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "Size: %{customdata[1]}<br>"
+            "Category: %{customdata[2]}<br>"
+            "Sales: %{customdata[3]:,.0f}<br>"
+            "GP%: %{customdata[4]:.1%}<extra></extra>"
+        ),
+    ),
+    secondary_y=True,
+)
+rank_fig.update_layout(
+    title=dict(text="Sales Rank vs GP%", font=dict(size=21, color="#17202a")),
+    width=rank_width,
+    height=560,
+    margin=dict(l=58, r=64, t=70, b=150),
+    plot_bgcolor="#fbfcfe",
+    paper_bgcolor="#fbfcfe",
+    hovermode="x unified",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    bargap=0.22,
+)
+rank_fig.update_xaxes(
+    title="SKU / Flavor / Product Name, sorted by Sales Value",
+    tickangle=-45,
+    tickfont=dict(size=10),
+    showgrid=False,
+    automargin=True,
+)
+rank_fig.update_yaxes(
+    title_text="Sales Value",
+    tickformat=",.0f",
+    showgrid=True,
+    gridcolor="#e6ebf2",
+    zeroline=False,
+    secondary_y=False,
+)
+rank_fig.update_yaxes(
+    title_text="GP%",
+    tickformat=".0%",
+    showgrid=False,
+    zeroline=False,
+    secondary_y=True,
+)
+
+st.markdown('<div class="chart-section-title">Sales Rank vs GP%</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="chart-section-note">Ranked bar and margin marker view. Scroll horizontally when the selected portfolio has many SKUs.</div>',
+    unsafe_allow_html=True,
+)
+render_scrolling_plotly_chart(rank_fig, height=590)
 
 with st.expander("Filtered SKU data", expanded=False):
     display = filtered.copy()
