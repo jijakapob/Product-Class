@@ -194,32 +194,47 @@ def local_css() -> None:
         div[data-baseweb="button-group"] {
             display: flex !important;
             flex-wrap: wrap !important;
-            gap: 0.38rem !important;
+            gap: 0.34rem !important;
             align-items: center !important;
+            justify-content: flex-start !important;
+            width: 100% !important;
         }
+        div[data-baseweb="button-group"] > button,
         [data-testid="stBaseButton-pills"],
-        [data-testid="stBaseButton-secondary"],
-        [data-testid="stBaseButton-primary"] {
-            min-height: 34px;
-            border-radius: 999px;
-            white-space: normal;
+        [data-testid="stBaseButton-pillsActive"] {
+            min-height: 30px !important;
+            height: 30px !important;
+            border-radius: 999px !important;
+            white-space: nowrap !important;
             line-height: 1.15;
-            padding: 0.24rem 0.7rem;
-            font-size: 0.86rem;
+            padding: 0.18rem 0.64rem !important;
+            font-size: 0.82rem !important;
+            font-weight: 620 !important;
             flex: 0 0 auto !important;
             width: auto !important;
-            max-width: 14rem;
+            max-width: 13rem !important;
+            box-shadow: none !important;
         }
+        div[data-baseweb="button-group"] > button p,
+        [data-testid="stBaseButton-pills"] p,
+        [data-testid="stBaseButton-pillsActive"] p {
+            margin: 0 !important;
+            line-height: 1.1 !important;
+        }
+        div[data-baseweb="button-group"] > button[kind="pills"],
         [data-testid="stBaseButton-pills"] {
-            background: var(--surface);
-            border: 1px solid #ccd6e2;
-            color: #344054;
+            background: #ffffff !important;
+            border: 1px solid #cfd9e5 !important;
+            color: #344054 !important;
         }
+        div[data-baseweb="button-group"] > button[kind="pills"]:hover,
         [data-testid="stBaseButton-pills"]:hover {
-            background: #eef4fb;
-            border-color: #8ea7c2;
-            color: var(--brand-blue);
+            background: #f2f6fb !important;
+            border-color: #8ea7c2 !important;
+            color: var(--brand-blue) !important;
         }
+        div[data-baseweb="button-group"] > button[kind="pillsActive"],
+        div[data-baseweb="button-group"] > button[aria-pressed="true"],
         [data-testid="stBaseButton-pills"][aria-pressed="true"],
         [data-testid="stBaseButton-pillsActive"],
         button[aria-pressed="true"] {
@@ -227,6 +242,18 @@ def local_css() -> None:
             border-color: #42698f !important;
             color: var(--brand-blue) !important;
             box-shadow: inset 0 0 0 1px rgba(18, 53, 91, 0.12);
+        }
+        .stButton button[kind="secondary"] {
+            min-height: 30px !important;
+            height: 30px !important;
+            padding: 0.16rem 0.62rem !important;
+            font-size: 0.8rem !important;
+            font-weight: 600 !important;
+            border-radius: 999px !important;
+            background: #ffffff !important;
+            color: #475467 !important;
+            border-color: #d7dee8 !important;
+            width: auto !important;
         }
         @media (max-width: 700px) {
             .main .block-container {
@@ -244,10 +271,10 @@ def local_css() -> None:
                 margin-top: 1.1rem;
             }
             [data-testid="stBaseButton-pills"],
-            [data-testid="stBaseButton-secondary"],
-            [data-testid="stBaseButton-primary"] {
-                min-height: 40px;
-                font-size: 0.88rem;
+            [data-testid="stBaseButton-pillsActive"] {
+                min-height: 36px !important;
+                height: 36px !important;
+                font-size: 0.84rem !important;
                 padding-left: 0.75rem;
                 padding-right: 0.75rem;
             }
