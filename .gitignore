@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+sales-gp-dashboard/
+archive_source_excel/
+*.xlsx
+*.xls
+~$*
+dashboard-filter-check.png
+sales_gp_filtered_data.csv
