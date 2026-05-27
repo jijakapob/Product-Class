@@ -5,7 +5,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
 
@@ -203,6 +202,10 @@ def local_css() -> None:
         div[data-testid="stHorizontalBlock"] {
             gap: 0.75rem;
         }
+        div[data-testid="stPlotlyChart"],
+        iframe {
+            max-width: 100% !important;
+        }
         .chart-section-title {
             color: var(--ink);
             font-size: 1.12rem;
@@ -281,29 +284,51 @@ def local_css() -> None:
         }
         @media (max-width: 700px) {
             .main .block-container {
-                padding: 1rem 0.85rem 1.6rem 0.85rem;
+                padding: 0.85rem 0.65rem 1.4rem 0.65rem;
             }
             h1 {
-                font-size: 2rem;
+                font-size: 1.65rem;
                 line-height: 1.15;
             }
             .section-caption, .filter-summary {
-                font-size: 0.88rem;
+                font-size: 0.82rem;
             }
             .filter-heading {
-                font-size: 1rem;
+                font-size: 0.94rem;
                 margin-top: 1.1rem;
             }
             [data-testid="stBaseButton-pills"],
-            [data-testid="stBaseButton-pillsActive"] {
-                min-height: 36px !important;
-                height: 36px !important;
+            [data-testid="stBaseButton-pillsActive"],
+            div[data-baseweb="button-group"] > button {
+                min-height: 38px !important;
+                height: 38px !important;
                 font-size: 0.84rem !important;
-                padding-left: 0.75rem;
-                padding-right: 0.75rem;
+                padding-left: 0.72rem !important;
+                padding-right: 0.72rem !important;
             }
             div[data-testid="stMetric"] {
-                padding: 12px 14px;
+                padding: 10px 12px;
+            }
+            div[data-testid="stMetricValue"] {
+                font-size: 1.25rem !important;
+                line-height: 1.18 !important;
+            }
+            .chart-section-title {
+                font-size: 1rem;
+                margin-top: 0.9rem;
+            }
+            .chart-section-note {
+                font-size: 0.78rem;
+            }
+        }
+        @media (max-width: 430px) {
+            iframe[title="st.iframe"] {
+                height: 320px !important;
+            }
+        }
+        @media (min-width: 431px) and (max-width: 900px) {
+            iframe[title="st.iframe"] {
+                height: 430px !important;
             }
         }
         </style>
@@ -524,16 +549,95 @@ def render_disabled_step(title: str, message: str) -> None:
     st.markdown(f'<div class="filter-disabled">{message}</div>', unsafe_allow_html=True)
 
 
-def render_scrolling_plotly_chart(fig: go.Figure, height: int) -> None:
-    html = fig.to_html(include_plotlyjs=True, full_html=False, config={"displaylogo": False, "scrollZoom": True})
-    components.html(
+def render_responsive_plotly_chart(
+    fig: go.Figure,
+    chart_id: str,
+    desktop_height: int,
+    tablet_height: int,
+    mobile_height: int,
+) -> None:
+    html = fig.to_html(
+        include_plotlyjs=True,
+        full_html=False,
+        config={"displaylogo": False, "scrollZoom": True, "responsive": True},
+        div_id=chart_id,
+    )
+    st.iframe(
         f"""
-        <div style="width:100%; overflow-x:auto; overflow-y:hidden; padding-bottom:4px;">
+        <style>
+          html, body {{
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #fbfcfe;
+          }}
+          .plotly-responsive-frame {{
+            width: 100%;
+            overflow: hidden;
+          }}
+        </style>
+        <div class="plotly-responsive-frame">
           {html}
         </div>
+        <script>
+          const chart = document.getElementById("{chart_id}");
+          const heights = {{
+            desktop: {desktop_height},
+            tablet: {tablet_height},
+            mobile: {mobile_height}
+          }};
+
+          function targetHeight() {{
+            const width = window.innerWidth || document.documentElement.clientWidth || 390;
+            if (width <= 430) return heights.mobile;
+            if (width <= 900) return heights.tablet;
+            return heights.desktop;
+          }}
+
+          function resizeChart() {{
+            if (!chart || !window.Plotly) return;
+            const width = Math.max(300, document.documentElement.clientWidth || window.innerWidth || 390);
+            const height = targetHeight();
+            const isMobile = width <= 430;
+            const isTablet = width > 430 && width <= 900;
+            const isRank = "{chart_id}".includes("rank");
+            const margin = isRank
+              ? (isMobile ? {{ l: 48, r: 42, t: 22, b: 92 }} : isTablet ? {{ l: 68, r: 58, t: 28, b: 120 }} : {{ l: 86, r: 74, t: 34, b: 142 }})
+              : (isMobile ? {{ l: 44, r: 12, t: 42, b: 42 }} : isTablet ? {{ l: 52, r: 18, t: 50, b: 52 }} : {{ l: 58, r: 22, t: 56, b: 58 }});
+            const baseFont = isMobile ? 9 : isTablet ? 10 : 11;
+            const titleFont = isMobile ? 12 : isTablet ? 15 : 18;
+            const tickFont = isMobile ? 8 : isTablet ? 9 : 10;
+            const axisTitleFont = isMobile ? 9 : isTablet ? 10 : 11;
+            window.Plotly.relayout(chart, {{
+              width,
+              height,
+              margin,
+              "font.size": baseFont,
+              "title.font.size": titleFont,
+              "legend.font.size": isMobile ? 8 : 10,
+              "legend.title.font.size": isMobile ? 8 : 10,
+              "xaxis.tickfont.size": tickFont,
+              "yaxis.tickfont.size": tickFont,
+              "yaxis2.tickfont.size": tickFont,
+              "xaxis.title.font.size": axisTitleFont,
+              "yaxis.title.font.size": axisTitleFont,
+              "yaxis2.title.font.size": axisTitleFont,
+              "xaxis.tickangle": isRank ? (isMobile ? -55 : -45) : 0
+            }});
+            window.parent.postMessage(
+              {{ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: height + 12 }},
+              "*"
+            );
+          }}
+
+          window.addEventListener("resize", resizeChart);
+          window.addEventListener("load", resizeChart);
+          requestAnimationFrame(resizeChart);
+          setTimeout(resizeChart, 250);
+        </script>
         """,
-        height=height,
-        scrolling=False,
+        width="stretch",
+        height="content",
     )
 
 
@@ -742,7 +846,7 @@ fig = px.scatter(
     color="Category",
     color_discrete_map=COLOR_MAP,
     size="Net Value 6M",
-    size_max=26,
+    size_max=22,
     hover_data={
         "Flavor Description": True,
         "Size": True,
@@ -807,13 +911,24 @@ for text, x_value, y_value in [
     )
 
 fig.update_layout(
-    height=650,
-    margin=dict(l=20, r=20, t=70, b=35),
+    autosize=True,
+    height=560,
+    margin=dict(l=58, r=22, t=56, b=58),
     legend_title_text="Category",
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="left",
+        x=0,
+        font=dict(size=10, color="#4b5563"),
+        title_font=dict(size=10),
+    ),
     plot_bgcolor="#fbfcfe",
     paper_bgcolor="#fbfcfe",
     hovermode="closest",
-    title=dict(font=dict(size=22, color="#17202a")),
+    title=dict(font=dict(size=18, color="#17202a")),
+    font=dict(size=11, color="#4b5563"),
 )
 fig.update_xaxes(
     title="Sales Value / Net Value 6M",
@@ -836,7 +951,13 @@ st.markdown(
     '<div class="chart-section-note">Bubble view for quadrant review: sales scale, margin quality, and category mix.</div>',
     unsafe_allow_html=True,
 )
-st.plotly_chart(fig, width="stretch", config={"displaylogo": False, "scrollZoom": True})
+render_responsive_plotly_chart(
+    fig,
+    "sales_gp_scatter",
+    desktop_height=560,
+    tablet_height=420,
+    mobile_height=308,
+)
 
 st.markdown('<div class="chart-section-title">Sales Rank vs GP%</div>', unsafe_allow_html=True)
 st.markdown(
@@ -863,8 +984,7 @@ ranked["Display Label"] = [
     f"{index + 1}. {shorten_label(name)}"
     for index, name in enumerate(ranked["Flavor Description"].astype(str).tolist())
 ]
-ranked["Bar Width"] = 0.28
-rank_width = max(780, min(5400, 92 * len(ranked)))
+ranked["Bar Width"] = 0.24
 
 rank_fig = make_subplots(specs=[[{"secondary_y": True}]])
 rank_fig.add_trace(
@@ -906,9 +1026,9 @@ rank_fig.add_trace(
     secondary_y=True,
 )
 rank_fig.update_layout(
-    width=rank_width,
-    height=560,
-    margin=dict(l=104, r=94, t=40, b=178),
+    autosize=True,
+    height=480,
+    margin=dict(l=86, r=74, t=34, b=142),
     plot_bgcolor="#fbfcfe",
     paper_bgcolor="#fbfcfe",
     hovermode="x unified",
@@ -921,8 +1041,8 @@ rank_fig.update_layout(
         font=dict(size=10, color="#4b5563"),
         bgcolor="rgba(251,252,254,0)",
     ),
-    bargap=0.68,
-    bargroupgap=0.26,
+    bargap=0.72,
+    bargroupgap=0.30,
 )
 rank_fig.update_xaxes(
     title="SKU rank, sales high to low",
@@ -951,7 +1071,13 @@ rank_fig.update_yaxes(
     tickfont=dict(color="#4b5563"),
     secondary_y=True,
 )
-render_scrolling_plotly_chart(rank_fig, height=590)
+render_responsive_plotly_chart(
+    rank_fig,
+    "sales_gp_rank",
+    desktop_height=480,
+    tablet_height=360,
+    mobile_height=300,
+)
 
 with st.expander("Filtered SKU data", expanded=False):
     display = filtered.copy()
