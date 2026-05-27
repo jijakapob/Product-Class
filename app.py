@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import re
 
 import pandas as pd
@@ -10,6 +11,7 @@ from plotly.subplots import make_subplots
 
 APP_TITLE = "Sales vs GP% Portfolio Dashboard"
 DEFAULT_DATA_FILE = Path("data/default_sales_gp.csv")
+PROFILE_IMAGE_FILE = Path("assets/profile_ji.jpg")
 
 REQUIRED_COLUMNS = ["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]
 
@@ -112,6 +114,60 @@ def local_css() -> None:
         h1, h2, h3 {
             color: var(--ink);
             letter-spacing: 0;
+        }
+        .dashboard-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1.4rem;
+            margin-bottom: 1rem;
+        }
+        .dashboard-title-block {
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+        .dashboard-title-block h1 {
+            margin: 0 0 0.35rem 0;
+            font-size: 2.45rem;
+            line-height: 1.08;
+            font-weight: 760;
+        }
+        .designer-profile {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.34rem;
+            padding: 0.2rem 0.1rem;
+            min-width: 120px;
+            transition: transform 180ms ease, filter 180ms ease;
+        }
+        .designer-profile:hover {
+            transform: translateY(-1px) scale(1.015);
+            filter: drop-shadow(0 9px 18px rgba(18, 53, 91, 0.13));
+        }
+        .designer-photo {
+            width: clamp(72px, 7vw, 92px);
+            height: clamp(72px, 7vw, 92px);
+            border-radius: 999px;
+            object-fit: cover;
+            border: 3px solid rgba(251, 252, 254, 0.95);
+            box-shadow: 0 10px 22px rgba(18, 53, 91, 0.16), 0 0 0 1px rgba(139, 156, 178, 0.28);
+            background: #e8eef6;
+        }
+        .designer-name {
+            color: #203a57;
+            font-size: 0.88rem;
+            font-weight: 720;
+            line-height: 1.15;
+            white-space: nowrap;
+        }
+        .designer-subtitle {
+            color: var(--muted);
+            font-size: 0.72rem;
+            font-weight: 560;
+            line-height: 1.1;
+            white-space: nowrap;
         }
         div[data-testid="stMetric"] {
             background: var(--surface);
@@ -286,9 +342,32 @@ def local_css() -> None:
             .main .block-container {
                 padding: 0.85rem 0.65rem 1.4rem 0.65rem;
             }
-            h1 {
+            .dashboard-header {
+                align-items: center;
+                flex-direction: column;
+                gap: 0.72rem;
+                text-align: center;
+                margin-bottom: 0.85rem;
+            }
+            .dashboard-title-block h1 {
                 font-size: 1.65rem;
                 line-height: 1.15;
+            }
+            .designer-profile {
+                min-width: 0;
+                gap: 0.24rem;
+            }
+            .designer-photo {
+                width: 64px;
+                height: 64px;
+                border-width: 2px;
+                box-shadow: 0 7px 16px rgba(18, 53, 91, 0.14), 0 0 0 1px rgba(139, 156, 178, 0.25);
+            }
+            .designer-name {
+                font-size: 0.82rem;
+            }
+            .designer-subtitle {
+                font-size: 0.68rem;
             }
             .section-caption, .filter-summary {
                 font-size: 0.82rem;
@@ -467,6 +546,13 @@ def format_money(value: float) -> str:
     if abs(value) >= 1_000:
         return f"{value / 1_000:,.1f}K"
     return f"{value:,.0f}"
+
+
+def image_data_uri(path: Path) -> str:
+    if not path.exists():
+        return ""
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
 
 
 def summarize_sizes(selected_sizes: list[str], available_sizes: list[str]) -> str:
@@ -652,9 +738,27 @@ if "last_category_signature" not in st.session_state:
 if "last_category_options_signature" not in st.session_state:
     st.session_state["last_category_options_signature"] = ""
 
-st.title("Sales vs GP% Portfolio Dashboard")
+profile_src = image_data_uri(PROFILE_IMAGE_FILE)
+profile_markup = ""
+if profile_src:
+    profile_markup = (
+        f'<div class="designer-profile" aria-label="Dashboard designer profile">'
+        f'<img class="designer-photo" src="{profile_src}" alt="Ji profile photo" loading="eager" decoding="async" />'
+        '<div class="designer-name">Designed by Ji</div>'
+        '<div class="designer-subtitle">Commercial Portfolio Analytics</div>'
+        "</div>"
+    )
+
 st.markdown(
-    '<div class="section-caption">FMCG beverage SKU portfolio view for commercial review, margin strategy, and category prioritization.</div>',
+    f"""
+<div class="dashboard-header">
+    <div class="dashboard-title-block">
+        <h1>Sales vs GP% Portfolio Dashboard</h1>
+        <div class="section-caption">FMCG beverage SKU portfolio view for commercial review, margin strategy, and category prioritization.</div>
+    </div>
+    {profile_markup}
+</div>
+""",
     unsafe_allow_html=True,
 )
 
