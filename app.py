@@ -1,5 +1,6 @@
 from pathlib import Path
 import base64
+import html
 import re
 
 import pandas as pd
@@ -73,18 +74,18 @@ EXCLUDED_CATEGORIES = [
 ]
 
 COLOR_MAP = {
-    "FJ 100%": "#1f77b4",
-    "VJ 100%": "#17a589",
-    "Cool 40%": "#f39c12",
-    "Super Kid": "#8e44ad",
-    "Squeeze": "#e74c3c",
-    "Aura": "#2e86de",
-    "Aquare": "#00a8a8",
-    "OEM": "#7f8c8d",
-    "OEM - S&P": "#34495e",
-    "Essence": "#c0392b",
-    "FOOD SERVICE TRADE": "#5d6d7e",
-    "Consumer product - Food": "#7d6608",
+    "FJ 100%": "#27496d",
+    "VJ 100%": "#2f7d73",
+    "Cool 40%": "#9b7a3c",
+    "Super Kid": "#6f638f",
+    "Squeeze": "#9a5f5a",
+    "Aura": "#3f6f99",
+    "Aquare": "#40878d",
+    "OEM": "#6f7d86",
+    "OEM - S&P": "#46566f",
+    "Essence": "#8a5a68",
+    "FOOD SERVICE TRADE": "#5b6d8b",
+    "Consumer product - Food": "#7d735d",
 }
 
 
@@ -96,41 +97,93 @@ def local_css() -> None:
         """
         <style>
         :root {
+            --navy: #10233f;
+            --navy-2: #18385d;
+            --steel: #52677f;
             --brand-blue: #12355b;
             --brand-blue-soft: #e8f0f8;
             --ink: #17202a;
             --muted: #667085;
-            --line: #d7dee8;
-            --soft: #f6f8fb;
+            --line: #d9e0ea;
+            --soft: #f4f7fb;
             --surface: #fbfcfe;
+            --card-shadow: 0 18px 42px rgba(19, 36, 61, 0.08), 0 2px 8px rgba(19, 36, 61, 0.04);
         }
         .stApp {
-            background: #f7f9fc;
+            background:
+                radial-gradient(circle at 14% 8%, rgba(77, 105, 137, 0.13), transparent 32%),
+                radial-gradient(circle at 88% 4%, rgba(35, 67, 103, 0.10), transparent 30%),
+                linear-gradient(180deg, #eef3f8 0%, #f7f9fc 38%, #f3f6fa 100%);
         }
         .main .block-container {
-            padding-top: 1.4rem;
-            padding-bottom: 2rem;
+            padding-top: 1.15rem;
+            padding-bottom: 2.5rem;
+            max-width: 1240px;
         }
         h1, h2, h3 {
             color: var(--ink);
             letter-spacing: 0;
+        }
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
+            border-right: 1px solid rgba(166, 181, 199, 0.45);
+        }
+        section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
+            padding-top: 1.25rem;
+        }
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3 {
+            color: var(--navy);
+            font-weight: 760;
+            letter-spacing: 0;
+        }
+        section[data-testid="stSidebar"] [data-testid="stFileUploader"],
+        section[data-testid="stSidebar"] [data-testid="stTextInput"],
+        section[data-testid="stSidebar"] [data-testid="stDownloadButton"] {
+            background: rgba(251, 252, 254, 0.76);
+            border: 1px solid rgba(206, 216, 228, 0.88);
+            border-radius: 16px;
+            padding: 0.72rem;
+            box-shadow: 0 10px 24px rgba(26, 44, 69, 0.05);
         }
         .dashboard-header {
             display: flex;
             align-items: flex-start;
             justify-content: space-between;
             gap: 1.4rem;
-            margin-bottom: 1rem;
+            margin-bottom: 1.25rem;
+            padding: 1.35rem 1.45rem;
+            border: 1px solid rgba(200, 211, 225, 0.88);
+            border-radius: 24px;
+            background:
+                linear-gradient(135deg, rgba(251, 252, 254, 0.96), rgba(238, 243, 249, 0.90)),
+                radial-gradient(circle at 88% 12%, rgba(18, 53, 91, 0.10), transparent 28%);
+            box-shadow: var(--card-shadow);
+            position: relative;
+            overflow: hidden;
+        }
+        .dashboard-header::after {
+            content: "";
+            position: absolute;
+            inset: auto -8% -46% 52%;
+            height: 180px;
+            background: linear-gradient(115deg, rgba(18, 53, 91, 0.08), rgba(82, 103, 127, 0.02));
+            transform: skewX(-18deg);
+            pointer-events: none;
         }
         .dashboard-title-block {
             min-width: 0;
             flex: 1 1 auto;
+            position: relative;
+            z-index: 1;
         }
         .dashboard-title-block h1 {
             margin: 0 0 0.35rem 0;
-            font-size: 2.45rem;
-            line-height: 1.08;
-            font-weight: 760;
+            font-size: clamp(2.15rem, 3vw, 3.05rem);
+            line-height: 1.02;
+            font-weight: 780;
+            letter-spacing: -0.01em;
+            color: var(--navy);
         }
         .designer-profile {
             flex: 0 0 auto;
@@ -138,8 +191,10 @@ def local_css() -> None:
             flex-direction: column;
             align-items: center;
             gap: 0.34rem;
-            padding: 0.2rem 0.1rem;
+            padding: 0.35rem 0.2rem;
             min-width: 120px;
+            position: relative;
+            z-index: 1;
             transition: transform 180ms ease, filter 180ms ease;
         }
         .designer-profile:hover {
@@ -172,27 +227,29 @@ def local_css() -> None:
         div[data-testid="stMetric"] {
             background: var(--surface);
             border: 1px solid var(--line);
-            border-radius: 8px;
+            border-radius: 18px;
             padding: 14px 16px;
-            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+            box-shadow: var(--card-shadow);
         }
         div[data-testid="stMetricLabel"] {
             color: var(--muted);
         }
         div.stButton > button {
-            border-radius: 6px;
-            border: 1px solid #c8d2df;
-            background: var(--surface);
-            color: #1f2a37;
+            border-radius: 10px;
+            border: 1px solid rgba(190, 202, 217, 0.95);
+            background: linear-gradient(180deg, #ffffff, #f6f8fb);
+            color: var(--navy);
             font-weight: 600;
             min-height: 34px;
             white-space: normal;
             line-height: 1.15;
+            box-shadow: 0 6px 14px rgba(26, 44, 69, 0.04);
         }
         div.stButton > button:hover {
-            border-color: #12355b;
-            color: #12355b;
+            border-color: var(--navy-2);
+            color: var(--navy);
             background: #f2f6fb;
+            box-shadow: 0 10px 20px rgba(26, 44, 69, 0.08);
         }
         .stButton button[kind="secondary"] {
             padding: 0.2rem 0.65rem;
@@ -205,52 +262,59 @@ def local_css() -> None:
             font-size: 0.92rem;
         }
         .section-caption {
-            margin-top: -0.55rem;
-            margin-bottom: 1rem;
+            margin-top: 0;
+            margin-bottom: 0;
+            max-width: 62rem;
+            font-weight: 390;
+            line-height: 1.55;
         }
         .filter-summary {
-            background: var(--soft);
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 0.68rem 0.86rem;
-            margin-bottom: 1rem;
+            background: linear-gradient(135deg, rgba(251, 252, 254, 0.94), rgba(239, 244, 250, 0.88));
+            border: 1px solid rgba(200, 211, 225, 0.92);
+            border-radius: 18px;
+            padding: 0.86rem 1rem;
+            margin: 1rem 0 1.1rem 0;
+            box-shadow: 0 12px 28px rgba(26, 44, 69, 0.06);
         }
         .filter-summary b {
             color: var(--ink);
         }
         .source-note {
             margin: 0.4rem 0 1rem 0;
+            color: var(--steel);
+            font-weight: 560;
         }
         .filter-heading {
-            color: var(--ink);
-            font-size: 0.94rem;
-            font-weight: 800;
+            color: var(--navy);
+            font-size: 0.88rem;
+            font-weight: 820;
             letter-spacing: 0;
-            margin: 1.15rem 0 0.28rem 0;
+            margin: 1.35rem 0 0.24rem 0;
+            text-transform: uppercase;
         }
         .filter-help {
             color: var(--muted);
             font-size: 0.8rem;
-            margin: -0.1rem 0 0.36rem 0;
+            margin: -0.1rem 0 0.46rem 0;
         }
         .filter-disabled {
             color: #8a97a8;
-            background: #eef2f6;
+            background: rgba(238, 243, 248, 0.74);
             border: 1px dashed #cbd5e1;
-            border-radius: 8px;
-            padding: 0.72rem 0.86rem;
+            border-radius: 16px;
+            padding: 0.86rem 1rem;
             font-size: 0.9rem;
             margin-top: 0.35rem;
         }
         .instruction-card {
-            background: var(--surface);
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 1rem 1.1rem;
-            color: var(--ink);
+            background: linear-gradient(135deg, rgba(251, 252, 254, 0.96), rgba(241, 245, 250, 0.88));
+            border: 1px solid rgba(200, 211, 225, 0.92);
+            border-radius: 20px;
+            padding: 1.08rem 1.2rem;
+            color: var(--navy);
             font-weight: 650;
-            margin-top: 0.75rem;
-            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+            margin-top: 0.9rem;
+            box-shadow: var(--card-shadow);
         }
         div[data-testid="stElementToolbar"] {
             display: none;
@@ -261,18 +325,74 @@ def local_css() -> None:
         div[data-testid="stPlotlyChart"],
         iframe {
             max-width: 100% !important;
+            border: 1px solid rgba(200, 211, 225, 0.92) !important;
+            border-radius: 22px !important;
+            box-shadow: var(--card-shadow) !important;
+            background: #fbfcfe !important;
         }
         .chart-section-title {
-            color: var(--ink);
-            font-size: 1.12rem;
-            font-weight: 760;
+            color: var(--navy);
+            font-size: 1.18rem;
+            font-weight: 780;
             letter-spacing: 0;
-            margin: 1.1rem 0 0.15rem 0;
+            margin: 1.55rem 0 0.15rem 0;
+            padding-top: 0.35rem;
+        }
+        .chart-section-title::before {
+            content: "";
+            display: inline-block;
+            width: 34px;
+            height: 2px;
+            margin-right: 10px;
+            vertical-align: middle;
+            background: linear-gradient(90deg, var(--navy), rgba(82, 103, 127, 0.22));
+            border-radius: 999px;
         }
         .chart-section-note {
             color: var(--muted);
             font-size: 0.86rem;
-            margin-bottom: 0.45rem;
+            margin-bottom: 0.62rem;
+            line-height: 1.45;
+        }
+        .kpi-card {
+            position: relative;
+            overflow: hidden;
+            min-height: 126px;
+            padding: 1rem 1.05rem 1rem 1.05rem;
+            border-radius: 20px;
+            background:
+                linear-gradient(180deg, rgba(251, 252, 254, 0.98), rgba(245, 248, 252, 0.92));
+            border: 1px solid rgba(200, 211, 225, 0.92);
+            box-shadow: var(--card-shadow);
+        }
+        .kpi-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 3px;
+            background: linear-gradient(90deg, #10233f, #52677f 55%, rgba(82, 103, 127, 0.1));
+        }
+        .kpi-label {
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 680;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            margin-bottom: 0.55rem;
+        }
+        .kpi-value {
+            color: var(--navy);
+            font-size: clamp(1.35rem, 2.2vw, 2rem);
+            line-height: 1.06;
+            font-weight: 780;
+            letter-spacing: -0.01em;
+            overflow-wrap: anywhere;
+        }
+        .kpi-subtext {
+            color: var(--steel);
+            font-size: 0.76rem;
+            font-weight: 520;
+            margin-top: 0.5rem;
         }
         div[data-baseweb="button-group"] {
             display: flex !important;
@@ -285,14 +405,14 @@ def local_css() -> None:
         div[data-baseweb="button-group"] > button,
         [data-testid="stBaseButton-pills"],
         [data-testid="stBaseButton-pillsActive"] {
-            min-height: 30px !important;
-            height: 30px !important;
+            min-height: 32px !important;
+            height: 32px !important;
             border-radius: 999px !important;
             white-space: nowrap !important;
             line-height: 1.15;
-            padding: 0.18rem 0.64rem !important;
+            padding: 0.20rem 0.72rem !important;
             font-size: 0.82rem !important;
-            font-weight: 620 !important;
+            font-weight: 680 !important;
             flex: 0 0 auto !important;
             width: auto !important;
             max-width: 13rem !important;
@@ -306,25 +426,26 @@ def local_css() -> None:
         }
         div[data-baseweb="button-group"] > button[kind="pills"],
         [data-testid="stBaseButton-pills"] {
-            background: #ffffff !important;
-            border: 1px solid #cfd9e5 !important;
+            background: rgba(251, 252, 254, 0.86) !important;
+            border: 1px solid rgba(199, 211, 225, 0.96) !important;
             color: #344054 !important;
         }
         div[data-baseweb="button-group"] > button[kind="pills"]:hover,
         [data-testid="stBaseButton-pills"]:hover {
-            background: #f2f6fb !important;
-            border-color: #8ea7c2 !important;
+            background: #eef4fa !important;
+            border-color: #7f96b2 !important;
             color: var(--brand-blue) !important;
+            box-shadow: 0 8px 16px rgba(18, 53, 91, 0.07) !important;
         }
         div[data-baseweb="button-group"] > button[kind="pillsActive"],
         div[data-baseweb="button-group"] > button[aria-pressed="true"],
         [data-testid="stBaseButton-pills"][aria-pressed="true"],
         [data-testid="stBaseButton-pillsActive"],
         button[aria-pressed="true"] {
-            background: var(--brand-blue-soft) !important;
-            border-color: #42698f !important;
-            color: var(--brand-blue) !important;
-            box-shadow: inset 0 0 0 1px rgba(18, 53, 91, 0.12);
+            background: linear-gradient(180deg, #18385d, #10233f) !important;
+            border-color: rgba(16, 35, 63, 0.85) !important;
+            color: #f8fafc !important;
+            box-shadow: 0 10px 20px rgba(18, 53, 91, 0.18) !important;
         }
         .stButton button[kind="secondary"] {
             min-height: 30px !important;
@@ -348,6 +469,8 @@ def local_css() -> None:
                 gap: 0.72rem;
                 text-align: center;
                 margin-bottom: 0.85rem;
+                padding: 1rem 0.9rem;
+                border-radius: 20px;
             }
             .dashboard-title-block h1 {
                 font-size: 1.65rem;
@@ -396,8 +519,26 @@ def local_css() -> None:
                 font-size: 1rem;
                 margin-top: 0.9rem;
             }
+            .chart-section-title::before {
+                width: 24px;
+                margin-right: 8px;
+            }
             .chart-section-note {
                 font-size: 0.78rem;
+            }
+            .kpi-card {
+                min-height: 104px;
+                padding: 0.86rem 0.92rem;
+                border-radius: 18px;
+            }
+            .kpi-label {
+                font-size: 0.68rem;
+            }
+            .kpi-value {
+                font-size: 1.28rem;
+            }
+            .kpi-subtext {
+                font-size: 0.7rem;
             }
         }
         @media (max-width: 430px) {
@@ -553,6 +694,20 @@ def image_data_uri(path: Path) -> str:
         return ""
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:image/jpeg;base64,{encoded}"
+
+
+def render_kpi_card(label: str, value: str, subtext: str = "") -> None:
+    subtext_markup = f'<div class="kpi-subtext">{html.escape(subtext)}</div>' if subtext else ""
+    st.markdown(
+        (
+            '<div class="kpi-card">'
+            f'<div class="kpi-label">{html.escape(label)}</div>'
+            f'<div class="kpi-value">{html.escape(value)}</div>'
+            f"{subtext_markup}"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def summarize_sizes(selected_sizes: list[str], available_sizes: list[str]) -> str:
@@ -930,10 +1085,14 @@ average_gp = filtered["GP%"].mean() if not filtered.empty else pd.NA
 sku_count = len(filtered)
 
 kpi_1, kpi_2, kpi_3, kpi_4 = st.columns(4)
-kpi_1.metric("Total Sales Value", format_money(total_sales))
-kpi_2.metric("Average GP%", "-" if pd.isna(average_gp) else f"{average_gp:.1%}")
-kpi_3.metric("Number of SKUs", f"{sku_count:,}")
-kpi_4.metric("Selected Category", selected_category_label)
+with kpi_1:
+    render_kpi_card("Total Sales Value", format_money(total_sales), "Filtered portfolio revenue")
+with kpi_2:
+    render_kpi_card("Average GP%", "-" if pd.isna(average_gp) else f"{average_gp:.1%}", "Weighted view by SKU mix")
+with kpi_3:
+    render_kpi_card("Number of SKUs", f"{sku_count:,}", "Active filtered items")
+with kpi_4:
+    render_kpi_card("Selected Category", selected_category_label, "Current strategic lens")
 
 avg_sales = filtered["Net Value 6M"].mean()
 avg_gp = filtered["GP%"].mean()
@@ -963,7 +1122,7 @@ fig = px.scatter(
 )
 
 fig.update_traces(
-    marker=dict(opacity=0.84, line=dict(width=0.8, color="#fbfcfe")),
+    marker=dict(opacity=0.80, line=dict(width=0.9, color="#fbfcfe")),
     hovertemplate=(
         "<b>%{customdata[0]}</b><br>"
         "Size: %{customdata[1]}<br>"
@@ -1028,24 +1187,25 @@ fig.update_layout(
         font=dict(size=10, color="#4b5563"),
         title_font=dict(size=10),
     ),
-    plot_bgcolor="#fbfcfe",
+    plot_bgcolor="#f8fafc",
     paper_bgcolor="#fbfcfe",
     hovermode="closest",
     title=dict(font=dict(size=18, color="#17202a")),
     font=dict(size=11, color="#4b5563"),
+    hoverlabel=dict(bgcolor="#10233f", bordercolor="#10233f", font=dict(color="#f8fafc", size=12)),
 )
 fig.update_xaxes(
     title="Sales Value / Net Value 6M",
     tickformat=",.0f",
     showgrid=True,
-    gridcolor="#e6ebf2",
+    gridcolor="#e8edf4",
     zeroline=False,
 )
 fig.update_yaxes(
     title="GP%",
     tickformat=".0%",
     showgrid=True,
-    gridcolor="#e6ebf2",
+    gridcolor="#e8edf4",
     zeroline=False,
     range=[max(y_min - y_padding, -1), min(y_max + y_padding, 1.5)],
 )
@@ -1133,9 +1293,10 @@ rank_fig.update_layout(
     autosize=True,
     height=480,
     margin=dict(l=86, r=74, t=34, b=142),
-    plot_bgcolor="#fbfcfe",
+    plot_bgcolor="#f8fafc",
     paper_bgcolor="#fbfcfe",
     hovermode="x unified",
+    hoverlabel=dict(bgcolor="#10233f", bordercolor="#10233f", font=dict(color="#f8fafc", size=12)),
     legend=dict(
         orientation="h",
         yanchor="bottom",
@@ -1160,7 +1321,7 @@ rank_fig.update_yaxes(
     title_text="Sales Value",
     tickformat=",.0f",
     showgrid=True,
-    gridcolor="#e6ebf2",
+    gridcolor="#e8edf4",
     zeroline=False,
     title_standoff=14,
     tickfont=dict(color="#4b5563"),
