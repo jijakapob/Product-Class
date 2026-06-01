@@ -14,7 +14,7 @@ APP_TITLE = "Sales vs GP% Portfolio Dashboard"
 DEFAULT_DATA_FILE = Path("data/default_sales_gp.csv")
 PROFILE_IMAGE_FILE = Path("assets/profile_ji.jpg")
 
-REQUIRED_COLUMNS = ["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]
+REQUIRED_COLUMNS = ["Flavor Description", "Size", "Category", "Net Value 6M", "GP%", "GP amount"]
 
 FIELD_LABELS = {
     "Flavor Description": "SKU / Product Name",
@@ -22,6 +22,7 @@ FIELD_LABELS = {
     "Category": "Category",
     "Net Value 6M": "Sales Value",
     "GP%": "GP%",
+    "GP amount": "GP Amount",
 }
 
 COLUMN_ALIASES = {
@@ -46,6 +47,15 @@ COLUMN_ALIASES = {
         "Value",
     ],
     "GP%": ["GP%", "Gross Profit %", "GP Percent", "Gross Margin %", "Margin %", "GP"],
+    "GP amount": [
+        "GP amount",
+        "GP Amount",
+        "Gross Profit Amount",
+        "Gross Profit",
+        "GP Value",
+        "Gross Margin Amount",
+        "Margin Amount",
+    ],
 }
 
 BASE_COLOR_MAP = {
@@ -629,6 +639,9 @@ def clean_data(raw: pd.DataFrame) -> pd.DataFrame:
     data["Net Value 6M"] = to_number(data["Net Value 6M"])
     data.loc[sales_text.eq("-"), "Net Value 6M"] = 0
     data["GP%"] = to_percentage(data["GP%"])
+    gp_amount_text = data["GP amount"].astype(str).str.strip()
+    data["GP amount"] = to_number(data["GP amount"])
+    data.loc[gp_amount_text.eq("-"), "GP amount"] = 0
 
     data = data.dropna(subset=REQUIRED_COLUMNS)
     data = data[data["Flavor Description"].ne("")]
@@ -703,6 +716,13 @@ def format_money(value: float) -> str:
     if abs(value) >= 1_000:
         return f"{value / 1_000:,.1f}K"
     return f"{value:,.0f}"
+
+
+def weighted_gp_percent(data: pd.DataFrame) -> float:
+    total_sales = data["Net Value 6M"].sum()
+    if pd.isna(total_sales) or total_sales == 0:
+        return pd.NA
+    return data["GP amount"].sum() / total_sales
 
 
 def image_data_uri(path: Path) -> str:
@@ -982,7 +1002,7 @@ else:
     df = load_default_data(str(DEFAULT_DATA_FILE))
 
 if df.empty:
-    st.warning("No usable rows were found after cleaning. Check that sales and GP% values are populated.")
+    st.warning("No usable rows were found after cleaning. Check that sales, GP amount, and GP% values are populated.")
     st.stop()
 
 with st.sidebar:
@@ -1067,6 +1087,10 @@ if search_term:
         filtered["Flavor Description"].str.contains(search_term, case=False, na=False)
     ]
 
+total_sales = filtered["Net Value 6M"].sum() if not filtered.empty else 0
+weighted_gp = weighted_gp_percent(filtered) if not filtered.empty else pd.NA
+weighted_gp_label = "-" if pd.isna(weighted_gp) else f"{weighted_gp:.1%}"
+
 with st.sidebar:
     st.caption(f"Selected SKU count: {len(filtered):,}")
     if not filtered.empty:
@@ -1085,7 +1109,8 @@ st.markdown(
         '<div class="filter-summary">'
         f"<b>Selected:</b> {selected_category_label} &nbsp;&nbsp; "
         f"<b>Sizes:</b> {summarize_sizes(selected_sizes, available_sizes)} &nbsp;&nbsp; "
-        f"<b>SKU Count:</b> {len(filtered):,}"
+        f"<b>SKU Count:</b> {len(filtered):,} &nbsp;&nbsp; "
+        f"<b>Weighted GP:</b> {weighted_gp_label}"
         "</div>"
     ),
     unsafe_allow_html=True,
@@ -1095,26 +1120,25 @@ if filtered.empty:
     st.info("No SKUs match the current category, size, and search filters.")
     st.stop()
 
-total_sales = filtered["Net Value 6M"].sum() if not filtered.empty else 0
-average_gp = filtered["GP%"].mean() if not filtered.empty else pd.NA
 sku_count = len(filtered)
 
 kpi_1, kpi_2, kpi_3, kpi_4 = st.columns(4)
 with kpi_1:
     render_kpi_card("Total Sales Value", format_money(total_sales), "Filtered portfolio revenue")
 with kpi_2:
-    render_kpi_card("Average GP%", "-" if pd.isna(average_gp) else f"{average_gp:.1%}", "Weighted view by SKU mix")
+    render_kpi_card("Weighted GP%", weighted_gp_label, "GP amount / sales value")
 with kpi_3:
     render_kpi_card("Number of SKUs", f"{sku_count:,}", "Active filtered items")
 with kpi_4:
     render_kpi_card("Selected Category", selected_category_label, "Current strategic lens")
 
 avg_sales = filtered["Net Value 6M"].mean()
-avg_gp = filtered["GP%"].mean()
+portfolio_gp = weighted_gp
+has_portfolio_gp = not pd.isna(portfolio_gp)
 x_min = filtered["Net Value 6M"].min()
 x_max = filtered["Net Value 6M"].max()
-y_min = min(filtered["GP%"].min(), avg_gp)
-y_max = max(filtered["GP%"].max(), avg_gp)
+y_min = min(filtered["GP%"].min(), portfolio_gp) if has_portfolio_gp else filtered["GP%"].min()
+y_max = max(filtered["GP%"].max(), portfolio_gp) if has_portfolio_gp else filtered["GP%"].max()
 y_padding = max((y_max - y_min) * 0.12, 0.03)
 
 fig = px.scatter(
@@ -1155,38 +1179,40 @@ fig.add_vline(
     annotation_text=f"Avg Sales {format_money(avg_sales)}",
     annotation_position="top left",
 )
-fig.add_hline(
-    y=avg_gp,
-    line_width=2,
-    line_dash="dash",
-    line_color="#6b7280",
-    annotation_text=f"Avg GP {avg_gp:.1%}",
-    annotation_position="bottom right",
-)
+if has_portfolio_gp:
+    fig.add_hline(
+        y=portfolio_gp,
+        line_width=2,
+        line_dash="dash",
+        line_color="#6b7280",
+        annotation_text=f"Weighted GP {portfolio_gp:.1%}",
+        annotation_position="bottom right",
+    )
 
 x_span = max(x_max - x_min, 1)
 label_x_low = x_min + x_span * 0.08
 label_x_high = avg_sales + (x_max - avg_sales) * 0.45 if x_max > avg_sales else x_max
-label_y_high = avg_gp + (y_max - avg_gp) * 0.70 if y_max > avg_gp else y_max
-label_y_low = y_min + (avg_gp - y_min) * 0.25 if avg_gp > y_min else y_min
+if has_portfolio_gp:
+    label_y_high = portfolio_gp + (y_max - portfolio_gp) * 0.70 if y_max > portfolio_gp else y_max
+    label_y_low = y_min + (portfolio_gp - y_min) * 0.25 if portfolio_gp > y_min else y_min
 
-for text, x_value, y_value in [
-    ("High Sales / High GP", label_x_high, label_y_high),
-    ("High Sales / Low GP", label_x_high, label_y_low),
-    ("Low Sales / High GP", label_x_low, label_y_high),
-    ("Low Sales / Low GP", label_x_low, label_y_low),
-]:
-    fig.add_annotation(
-        x=x_value,
-        y=y_value,
-        text=text,
-        showarrow=False,
-        font=dict(size=12, color="#4b5563"),
-        bgcolor="rgba(251,252,254,0.80)",
-        bordercolor="rgba(215,222,232,0.9)",
-        borderwidth=1,
-        borderpad=4,
-    )
+    for text, x_value, y_value in [
+        ("High Sales / High GP", label_x_high, label_y_high),
+        ("High Sales / Low GP", label_x_high, label_y_low),
+        ("Low Sales / High GP", label_x_low, label_y_high),
+        ("Low Sales / Low GP", label_x_low, label_y_low),
+    ]:
+        fig.add_annotation(
+            x=x_value,
+            y=y_value,
+            text=text,
+            showarrow=False,
+            font=dict(size=12, color="#4b5563"),
+            bgcolor="rgba(251,252,254,0.80)",
+            bordercolor="rgba(215,222,232,0.9)",
+            borderwidth=1,
+            borderpad=4,
+        )
 
 fig.update_layout(
     autosize=True,
@@ -1363,4 +1389,5 @@ with st.expander("Filtered SKU data", expanded=False):
     display = filtered.copy()
     display["GP%"] = display["GP%"].map(lambda value: f"{value:.1%}")
     display["Net Value 6M"] = display["Net Value 6M"].map(lambda value: f"{value:,.0f}")
+    display["GP amount"] = display["GP amount"].map(lambda value: f"{value:,.0f}")
     st.dataframe(display, width="stretch", hide_index=True)
