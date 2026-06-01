@@ -1251,15 +1251,15 @@ view_config = {
     },
     "Sales vs CVM": {
         "title": "Sales vs Inventory Efficiency (CVM)",
-        "purpose": "Inventory Productivity Analysis",
+        "purpose": "Inventory Productivity Analysis. Lower CVM indicates faster inventory turnover and better inventory efficiency",
         "plot_title": "Sales Value vs CVM Stock Cover",
         "x": "Net Value 6M",
         "y": "CVM",
         "x_title": "Sales Value / Net Value 6M",
-        "y_title": "CVM stock cover (months, lower is better)",
+        "y_title": "Stock Cover (Months) - Lower is Better",
         "x_tickformat": ",.0f",
         "y_tickformat": ".1f",
-        "reverse_y": True,
+        "reverse_y": False,
     },
     "GP% vs CVM": {
         "title": "GP% vs CVM",
@@ -1335,7 +1335,8 @@ fig.update_traces(
         "GP Amount: %{customdata[5]:,.0f}<br>"
         "CVM: %{customdata[6]}<br>"
         "Rationalization Score: %{customdata[7]:.1f}<br>"
-        "Status: %{customdata[8]}<extra></extra>"
+        "Status: %{customdata[8]}<br>"
+        "<br><i>CVM measures months of stock cover. Lower values indicate faster sell-through.</i><extra></extra>"
     ),
 )
 
@@ -1396,10 +1397,10 @@ elif analysis_view == "Sales vs CVM":
     y_low = y_min + (median_cvm - y_min) * 0.35 if median_cvm > y_min else y_min
     y_high = median_cvm + (y_max - median_cvm) * 0.45 if y_max > median_cvm else y_max
     quadrant_annotations = [
-        ("STAR SKU", x_high, y_low),
-        ("Inventory Optimization", x_high, y_high),
-        ("Niche SKU", x_low, y_low),
-        ("Rationalization Candidate", x_low, y_high),
+        ("Low Sales / High Stock Cover", x_low, y_high),
+        ("High Sales / High Stock Cover", x_high, y_high),
+        ("Low Sales / Low Stock Cover", x_low, y_low),
+        ("High Sales / Low Stock Cover", x_high, y_low),
     ]
 else:
     fig.add_vline(
