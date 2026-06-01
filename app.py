@@ -10,11 +10,23 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 
-APP_TITLE = "Sales vs GP% Portfolio Dashboard"
+APP_TITLE = "Product Class SKU Rationalization Dashboard"
 DEFAULT_DATA_FILE = Path("data/default_sales_gp.csv")
 PROFILE_IMAGE_FILE = Path("assets/profile_ji.jpg")
 
-REQUIRED_COLUMNS = ["Flavor Description", "Size", "Category", "Net Value 6M", "GP%", "GP amount"]
+REQUIRED_COLUMNS = ["Flavor Description", "Size", "Category", "Net Value 6M", "GP%", "GP amount", "CVM"]
+REQUIRED_NON_NULL_COLUMNS = [
+    "Flavor Description",
+    "Size",
+    "Category",
+    "Net Value 6M",
+    "GP%",
+    "GP amount",
+]
+
+SALES_WEIGHT = 0.40
+GP_AMOUNT_WEIGHT = 0.40
+CVM_WEIGHT = 0.20
 
 FIELD_LABELS = {
     "Flavor Description": "SKU / Product Name",
@@ -23,6 +35,7 @@ FIELD_LABELS = {
     "Net Value 6M": "Sales Value",
     "GP%": "GP%",
     "GP amount": "GP Amount",
+    "CVM": "CVM",
 }
 
 COLUMN_ALIASES = {
@@ -55,6 +68,16 @@ COLUMN_ALIASES = {
         "GP Value",
         "Gross Margin Amount",
         "Margin Amount",
+    ],
+    "CVM": [
+        "CVM",
+        "CVM MOQ FG",
+        "CVM FG",
+        "Stock Cover",
+        "Stock Cover Months",
+        "Inventory Cover",
+        "Inventory Cover Months",
+        "Months Cover",
     ],
 }
 
@@ -608,11 +631,15 @@ def detect_mapping(columns: list[object]) -> tuple[dict[str, str | None], dict[s
     candidates: dict[str, list[str]] = {}
     for canonical, aliases in COLUMN_ALIASES.items():
         matches: list[str] = []
+        preferred_match: str | None = None
         for alias in aliases:
-            matches.extend(normalized_columns.get(normalize_text(alias), []))
+            alias_matches = normalized_columns.get(normalize_text(alias), [])
+            matches.extend(alias_matches)
+            if preferred_match is None and len(alias_matches) == 1:
+                preferred_match = alias_matches[0]
         unique_matches = list(dict.fromkeys(matches))
         candidates[canonical] = unique_matches
-        mapping[canonical] = unique_matches[0] if len(unique_matches) == 1 else None
+        mapping[canonical] = preferred_match if preferred_match else None
     return mapping, candidates
 
 
@@ -628,8 +655,19 @@ def apply_mapping(raw: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
     return mapped
 
 
+def canonicalize_columns(raw: pd.DataFrame) -> pd.DataFrame:
+    if all(column in raw.columns for column in REQUIRED_COLUMNS):
+        return raw
+
+    auto_mapping, _ = detect_mapping(raw.columns.tolist())
+    if mapping_is_complete(auto_mapping):
+        return apply_mapping(raw, {key: value for key, value in auto_mapping.items() if value})
+
+    return raw
+
+
 def clean_data(raw: pd.DataFrame) -> pd.DataFrame:
-    data = raw.copy()
+    data = canonicalize_columns(raw).copy()
     data = data.dropna(how="all")
     data = data[REQUIRED_COLUMNS]
     data["Flavor Description"] = data["Flavor Description"].astype(str).str.strip()
@@ -642,8 +680,9 @@ def clean_data(raw: pd.DataFrame) -> pd.DataFrame:
     gp_amount_text = data["GP amount"].astype(str).str.strip()
     data["GP amount"] = to_number(data["GP amount"])
     data.loc[gp_amount_text.eq("-"), "GP amount"] = 0
+    data["CVM"] = to_number(data["CVM"])
 
-    data = data.dropna(subset=REQUIRED_COLUMNS)
+    data = data.dropna(subset=REQUIRED_NON_NULL_COLUMNS)
     data = data[data["Flavor Description"].ne("")]
     data = data.drop_duplicates()
 
@@ -723,6 +762,39 @@ def weighted_gp_percent(data: pd.DataFrame) -> float:
     if pd.isna(total_sales) or total_sales == 0:
         return pd.NA
     return data["GP amount"].sum() / total_sales
+
+
+def normalized_score(series: pd.Series, higher_is_better: bool = True) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce")
+    min_value = numeric.min()
+    max_value = numeric.max()
+    if pd.isna(min_value) or pd.isna(max_value) or max_value == min_value:
+        return pd.Series(100.0, index=series.index)
+    score = (numeric - min_value) / (max_value - min_value)
+    if not higher_is_better:
+        score = 1 - score
+    return score.clip(0, 1) * 100
+
+
+def add_rationalization_metrics(data: pd.DataFrame) -> pd.DataFrame:
+    scored = data.copy()
+    scored["Sales Score"] = normalized_score(scored["Net Value 6M"], higher_is_better=True)
+    scored["GP Amount Score"] = normalized_score(scored["GP amount"], higher_is_better=True)
+    scored["CVM Score"] = normalized_score(scored["CVM"], higher_is_better=False).fillna(50)
+    scored["Rationalization Score"] = (
+        scored["Sales Score"] * SALES_WEIGHT
+        + scored["GP Amount Score"] * GP_AMOUNT_WEIGHT
+        + scored["CVM Score"] * CVM_WEIGHT
+    ).round(1)
+
+    rank_pct = scored["Rationalization Score"].rank(method="first", ascending=False) / len(scored)
+    scored["Rationalization Status"] = pd.cut(
+        rank_pct,
+        bins=[0, 0.25, 0.50, 0.75, 1.0],
+        labels=["GROW", "MAINTAIN", "WATCHLIST", "RATIONALIZE"],
+        include_lowest=True,
+    ).astype(str)
+    return scored
 
 
 def image_data_uri(path: Path) -> str:
@@ -944,8 +1016,8 @@ st.markdown(
     f"""
 <div class="dashboard-header">
     <div class="dashboard-title-block">
-        <h1>Sales vs GP% Portfolio Dashboard</h1>
-        <div class="section-caption">FMCG beverage SKU portfolio view for commercial review, margin strategy, and category prioritization.</div>
+        <h1>{APP_TITLE}</h1>
+        <div class="section-caption">FMCG beverage SKU portfolio view for commercial review, profitability, inventory efficiency, and rationalization priorities.</div>
     </div>
     {profile_markup}
 </div>
@@ -1086,6 +1158,11 @@ if search_term:
     filtered = filtered[
         filtered["Flavor Description"].str.contains(search_term, case=False, na=False)
     ]
+if not filtered.empty:
+    filtered = add_rationalization_metrics(filtered)
+    filtered["CVM Label"] = filtered["CVM"].map(
+        lambda value: f"{value:.1f} months" if pd.notna(value) else "Not available"
+    )
 
 total_sales = filtered["Net Value 6M"].sum() if not filtered.empty else 0
 weighted_gp = weighted_gp_percent(filtered) if not filtered.empty else pd.NA
@@ -1132,32 +1209,119 @@ with kpi_3:
 with kpi_4:
     render_kpi_card("Selected Category", selected_category_label, "Current strategic lens")
 
+status_counts = filtered["Rationalization Status"].value_counts()
+status_1, status_2, status_3, status_4 = st.columns(4)
+with status_1:
+    render_kpi_card("Grow SKU Count", f"{status_counts.get('GROW', 0):,}", "Top quartile score")
+with status_2:
+    render_kpi_card("Maintain SKU Count", f"{status_counts.get('MAINTAIN', 0):,}", "Stable performers")
+with status_3:
+    render_kpi_card("Watchlist SKU Count", f"{status_counts.get('WATCHLIST', 0):,}", "Needs review")
+with status_4:
+    render_kpi_card("Rationalize SKU Count", f"{status_counts.get('RATIONALIZE', 0):,}", "Bottom quartile score")
+
+analysis_view = st.pills(
+    "Analysis View",
+    ["Sales vs GP%", "Sales vs CVM", "GP% vs CVM"],
+    default="Sales vs GP%",
+    selection_mode="single",
+    width="content",
+)
+analysis_view = analysis_view or "Sales vs GP%"
+
 avg_sales = filtered["Net Value 6M"].mean()
+median_sales = filtered["Net Value 6M"].median()
+median_gp = filtered["GP%"].median()
+median_cvm = filtered["CVM"].median()
 portfolio_gp = weighted_gp
 has_portfolio_gp = not pd.isna(portfolio_gp)
-x_min = filtered["Net Value 6M"].min()
-x_max = filtered["Net Value 6M"].max()
-y_min = min(filtered["GP%"].min(), portfolio_gp) if has_portfolio_gp else filtered["GP%"].min()
-y_max = max(filtered["GP%"].max(), portfolio_gp) if has_portfolio_gp else filtered["GP%"].max()
+
+view_config = {
+    "Sales vs GP%": {
+        "title": "Sales vs GP%",
+        "purpose": "Profitability Analysis",
+        "plot_title": "SKU Sales Value vs Gross Profit %",
+        "x": "Net Value 6M",
+        "y": "GP%",
+        "x_title": "Sales Value / Net Value 6M",
+        "y_title": "GP%",
+        "x_tickformat": ",.0f",
+        "y_tickformat": ".0%",
+        "reverse_y": False,
+    },
+    "Sales vs CVM": {
+        "title": "Sales vs Inventory Efficiency (CVM)",
+        "purpose": "Inventory Productivity Analysis",
+        "plot_title": "Sales Value vs CVM Stock Cover",
+        "x": "Net Value 6M",
+        "y": "CVM",
+        "x_title": "Sales Value / Net Value 6M",
+        "y_title": "CVM stock cover (months, lower is better)",
+        "x_tickformat": ",.0f",
+        "y_tickformat": ".1f",
+        "reverse_y": True,
+    },
+    "GP% vs CVM": {
+        "title": "GP% vs CVM",
+        "purpose": "Profitability + Inventory Efficiency Analysis",
+        "plot_title": "Gross Profit % vs CVM Stock Cover",
+        "x": "GP%",
+        "y": "CVM",
+        "x_title": "GP%",
+        "y_title": "CVM stock cover (months, lower is better)",
+        "x_tickformat": ".0%",
+        "y_tickformat": ".1f",
+        "reverse_y": True,
+    },
+}
+config = view_config[analysis_view]
+x_column = config["x"]
+y_column = config["y"]
+chart_data = filtered.copy()
+chart_data["CVM Label"] = chart_data["CVM"].map(
+    lambda value: f"{value:.1f} months" if pd.notna(value) else "Not available"
+)
+plot_y_column = y_column
+if y_column == "CVM":
+    selected_cvm_median = chart_data["CVM"].median()
+    default_cvm_median = df["CVM"].median()
+    cvm_fallback = selected_cvm_median if pd.notna(selected_cvm_median) else default_cvm_median
+    if pd.isna(cvm_fallback):
+        cvm_fallback = 0
+    chart_data["CVM Plot"] = chart_data["CVM"].fillna(cvm_fallback)
+    plot_y_column = "CVM Plot"
+
+avg_sales = chart_data["Net Value 6M"].mean()
+median_sales = chart_data["Net Value 6M"].median()
+median_gp = chart_data["GP%"].median()
+median_cvm = chart_data[plot_y_column].median() if y_column == "CVM" else chart_data["CVM"].median()
+x_min = chart_data[x_column].min()
+x_max = chart_data[x_column].max()
+y_min = chart_data[plot_y_column].min()
+y_max = chart_data[plot_y_column].max()
+x_padding = max((x_max - x_min) * 0.08, 0.01 if x_column == "GP%" else 1)
 y_padding = max((y_max - y_min) * 0.12, 0.03)
 
 fig = px.scatter(
-    filtered,
-    x="Net Value 6M",
-    y="GP%",
+    chart_data,
+    x=x_column,
+    y=plot_y_column,
     color="Category",
     color_discrete_map=color_map,
     size="Net Value 6M",
     size_max=22,
-    hover_data={
-        "Flavor Description": True,
-        "Size": True,
-        "Category": True,
-        "Net Value 6M": ":,.0f",
-        "GP%": ":.1%",
-    },
-    custom_data=["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"],
-    title="SKU Sales Value vs Gross Profit %",
+    custom_data=[
+        "Flavor Description",
+        "Size",
+        "Category",
+        "Net Value 6M",
+        "GP%",
+        "GP amount",
+        "CVM Label",
+        "Rationalization Score",
+        "Rationalization Status",
+    ],
+    title=config["plot_title"],
 )
 
 fig.update_traces(
@@ -1167,52 +1331,116 @@ fig.update_traces(
         "Size: %{customdata[1]}<br>"
         "Category: %{customdata[2]}<br>"
         "Sales Value: %{customdata[3]:,.0f}<br>"
-        "GP%: %{customdata[4]:.1%}<extra></extra>"
+        "GP%: %{customdata[4]:.1%}<br>"
+        "GP Amount: %{customdata[5]:,.0f}<br>"
+        "CVM: %{customdata[6]}<br>"
+        "Rationalization Score: %{customdata[7]:.1f}<br>"
+        "Status: %{customdata[8]}<extra></extra>"
     ),
 )
 
-fig.add_vline(
-    x=avg_sales,
-    line_width=2,
-    line_dash="dash",
-    line_color="#6b7280",
-    annotation_text=f"Avg Sales {format_money(avg_sales)}",
-    annotation_position="top left",
-)
-if has_portfolio_gp:
-    fig.add_hline(
-        y=portfolio_gp,
+if analysis_view == "Sales vs GP%":
+    fig.add_vline(
+        x=avg_sales,
         line_width=2,
         line_dash="dash",
         line_color="#6b7280",
-        annotation_text=f"Weighted GP {portfolio_gp:.1%}",
+        annotation_text=f"Avg Sales {format_money(avg_sales)}",
+        annotation_position="top left",
+    )
+    if has_portfolio_gp:
+        fig.add_hline(
+            y=portfolio_gp,
+            line_width=2,
+            line_dash="dash",
+            line_color="#6b7280",
+            annotation_text=f"Weighted GP {portfolio_gp:.1%}",
+            annotation_position="bottom right",
+        )
+        gp_y_min = min(y_min, portfolio_gp)
+        gp_y_max = max(y_max, portfolio_gp)
+        gp_y_padding = max((gp_y_max - gp_y_min) * 0.12, 0.03)
+        y_min, y_max, y_padding = gp_y_min, gp_y_max, gp_y_padding
+        x_span = max(x_max - x_min, 1)
+        label_x_low = x_min + x_span * 0.08
+        label_x_high = avg_sales + (x_max - avg_sales) * 0.45 if x_max > avg_sales else x_max
+        label_y_high = portfolio_gp + (y_max - portfolio_gp) * 0.70 if y_max > portfolio_gp else y_max
+        label_y_low = y_min + (portfolio_gp - y_min) * 0.25 if portfolio_gp > y_min else y_min
+        quadrant_annotations = [
+            ("High Sales / High GP", label_x_high, label_y_high),
+            ("High Sales / Low GP", label_x_high, label_y_low),
+            ("Low Sales / High GP", label_x_low, label_y_high),
+            ("Low Sales / Low GP", label_x_low, label_y_low),
+        ]
+    else:
+        quadrant_annotations = []
+elif analysis_view == "Sales vs CVM":
+    fig.add_vline(
+        x=median_sales,
+        line_width=2,
+        line_dash="dash",
+        line_color="#6b7280",
+        annotation_text=f"Median Sales {format_money(median_sales)}",
+        annotation_position="top left",
+    )
+    fig.add_hline(
+        y=median_cvm,
+        line_width=2,
+        line_dash="dash",
+        line_color="#6b7280",
+        annotation_text=f"Median CVM {median_cvm:.1f}",
         annotation_position="bottom right",
     )
+    x_low = x_min + (median_sales - x_min) * 0.45 if median_sales > x_min else x_min
+    x_high = median_sales + (x_max - median_sales) * 0.45 if x_max > median_sales else x_max
+    y_low = y_min + (median_cvm - y_min) * 0.35 if median_cvm > y_min else y_min
+    y_high = median_cvm + (y_max - median_cvm) * 0.45 if y_max > median_cvm else y_max
+    quadrant_annotations = [
+        ("STAR SKU", x_high, y_low),
+        ("Inventory Optimization", x_high, y_high),
+        ("Niche SKU", x_low, y_low),
+        ("Rationalization Candidate", x_low, y_high),
+    ]
+else:
+    fig.add_vline(
+        x=median_gp,
+        line_width=2,
+        line_dash="dash",
+        line_color="#6b7280",
+        annotation_text=f"Median GP {median_gp:.1%}",
+        annotation_position="top left",
+    )
+    fig.add_hline(
+        y=median_cvm,
+        line_width=2,
+        line_dash="dash",
+        line_color="#6b7280",
+        annotation_text=f"Median CVM {median_cvm:.1f}",
+        annotation_position="bottom right",
+    )
+    x_low = x_min + (median_gp - x_min) * 0.35 if median_gp > x_min else x_min
+    x_high = median_gp + (x_max - median_gp) * 0.45 if x_max > median_gp else x_max
+    y_low = y_min + (median_cvm - y_min) * 0.35 if median_cvm > y_min else y_min
+    y_high = median_cvm + (y_max - median_cvm) * 0.45 if y_max > median_cvm else y_max
+    quadrant_annotations = [
+        ("KEEP / GROW", x_high, y_low),
+        ("FIX INVENTORY", x_high, y_high),
+        ("WATCH", x_low, y_low),
+        ("RATIONALIZE", x_low, y_high),
+    ]
 
-x_span = max(x_max - x_min, 1)
-label_x_low = x_min + x_span * 0.08
-label_x_high = avg_sales + (x_max - avg_sales) * 0.45 if x_max > avg_sales else x_max
-if has_portfolio_gp:
-    label_y_high = portfolio_gp + (y_max - portfolio_gp) * 0.70 if y_max > portfolio_gp else y_max
-    label_y_low = y_min + (portfolio_gp - y_min) * 0.25 if portfolio_gp > y_min else y_min
-
-    for text, x_value, y_value in [
-        ("High Sales / High GP", label_x_high, label_y_high),
-        ("High Sales / Low GP", label_x_high, label_y_low),
-        ("Low Sales / High GP", label_x_low, label_y_high),
-        ("Low Sales / Low GP", label_x_low, label_y_low),
-    ]:
-        fig.add_annotation(
-            x=x_value,
-            y=y_value,
-            text=text,
-            showarrow=False,
-            font=dict(size=12, color="#4b5563"),
-            bgcolor="rgba(251,252,254,0.80)",
-            bordercolor="rgba(215,222,232,0.9)",
-            borderwidth=1,
-            borderpad=4,
-        )
+for text, x_value, y_value in quadrant_annotations:
+    fig.add_annotation(
+        x=x_value,
+        y=y_value,
+        text=text,
+        showarrow=False,
+        font=dict(size=12, color="#4b5563"),
+        bgcolor="rgba(251,252,254,0.80)",
+        bordercolor="rgba(215,222,232,0.9)",
+        borderwidth=1,
+        borderpad=4,
+    )
 
 fig.update_layout(
     autosize=True,
@@ -1236,24 +1464,29 @@ fig.update_layout(
     hoverlabel=dict(bgcolor="#10233f", bordercolor="#10233f", font=dict(color="#f8fafc", size=12)),
 )
 fig.update_xaxes(
-    title="Sales Value / Net Value 6M",
-    tickformat=",.0f",
+    title=config["x_title"],
+    tickformat=config["x_tickformat"],
     showgrid=True,
     gridcolor="#e8edf4",
     zeroline=False,
+    range=[x_min - x_padding, x_max + x_padding],
 )
+if config["reverse_y"]:
+    y_axis_range = [y_max + y_padding, max(y_min - y_padding, 0)]
+else:
+    y_axis_range = [max(y_min - y_padding, -1), min(y_max + y_padding, 1.5) if y_column == "GP%" else y_max + y_padding]
 fig.update_yaxes(
-    title="GP%",
-    tickformat=".0%",
+    title=config["y_title"],
+    tickformat=config["y_tickformat"],
     showgrid=True,
     gridcolor="#e8edf4",
     zeroline=False,
-    range=[max(y_min - y_padding, -1), min(y_max + y_padding, 1.5)],
+    range=y_axis_range,
 )
 
-st.markdown('<div class="chart-section-title">Sales vs GP% Portfolio Map</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="chart-section-title">{config["title"]}</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="chart-section-note">Bubble view for quadrant review: sales scale, margin quality, and category mix.</div>',
+    f'<div class="chart-section-note">{config["purpose"]}. Bubble view for SKU rationalization review.</div>',
     unsafe_allow_html=True,
 )
 render_responsive_plotly_chart(
@@ -1270,6 +1503,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+rank_by = st.pills(
+    "Rank By",
+    ["Sales", "GP%", "GP Amount", "CVM", "Rationalization Score"],
+    default="Sales",
+    selection_mode="single",
+    width="content",
+)
+rank_by = rank_by or "Sales"
 rank_view = st.pills(
     "Ranked SKU count",
     ["Top 10", "Top 20", "Top 30", "All"],
@@ -1282,7 +1523,15 @@ rank_view = rank_view or "Top 10"
 rank_limits = {"Top 10": 10, "Top 20": 20, "Top 30": 30}
 rank_limit = rank_limits.get(rank_view)
 
-ranked = filtered.sort_values("Net Value 6M", ascending=False).reset_index(drop=True).copy()
+rank_rules = {
+    "Sales": ("Net Value 6M", False),
+    "GP%": ("GP%", False),
+    "GP Amount": ("GP amount", False),
+    "CVM": ("CVM", True),
+    "Rationalization Score": ("Rationalization Score", False),
+}
+rank_column, rank_ascending = rank_rules[rank_by]
+ranked = filtered.sort_values(rank_column, ascending=rank_ascending).reset_index(drop=True).copy()
 if rank_limit is not None:
     ranked = ranked.head(rank_limit).copy()
 ranked["Display Label"] = [
@@ -1300,13 +1549,29 @@ rank_fig.add_trace(
         width=ranked["Bar Width"],
         marker=dict(color="#9bbbd6", line=dict(color="rgba(66, 105, 143, 0.12)", width=0.4)),
         opacity=0.72,
-        customdata=ranked[["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]],
+        customdata=ranked[
+            [
+                "Flavor Description",
+                "Size",
+                "Category",
+                "Net Value 6M",
+                "GP%",
+                "GP amount",
+                "CVM Label",
+                "Rationalization Score",
+                "Rationalization Status",
+            ]
+        ],
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
             "Size: %{customdata[1]}<br>"
             "Category: %{customdata[2]}<br>"
             "Sales: %{customdata[3]:,.0f}<br>"
-            "GP%: %{customdata[4]:.1%}<extra></extra>"
+            "GP%: %{customdata[4]:.1%}<br>"
+            "GP Amount: %{customdata[5]:,.0f}<br>"
+            "CVM: %{customdata[6]}<br>"
+            "Rationalization Score: %{customdata[7]:.1f}<br>"
+            "Status: %{customdata[8]}<extra></extra>"
         ),
     ),
     secondary_y=False,
@@ -1319,13 +1584,29 @@ rank_fig.add_trace(
         mode="lines+markers",
         line=dict(color="#238f7d", width=1.9),
         marker=dict(size=6.5, color="#238f7d", line=dict(color="#fbfcfe", width=1.2)),
-        customdata=ranked[["Flavor Description", "Size", "Category", "Net Value 6M", "GP%"]],
+        customdata=ranked[
+            [
+                "Flavor Description",
+                "Size",
+                "Category",
+                "Net Value 6M",
+                "GP%",
+                "GP amount",
+                "CVM Label",
+                "Rationalization Score",
+                "Rationalization Status",
+            ]
+        ],
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
             "Size: %{customdata[1]}<br>"
             "Category: %{customdata[2]}<br>"
             "Sales: %{customdata[3]:,.0f}<br>"
-            "GP%: %{customdata[4]:.1%}<extra></extra>"
+            "GP%: %{customdata[4]:.1%}<br>"
+            "GP Amount: %{customdata[5]:,.0f}<br>"
+            "CVM: %{customdata[6]}<br>"
+            "Rationalization Score: %{customdata[7]:.1f}<br>"
+            "Status: %{customdata[8]}<extra></extra>"
         ),
     ),
     secondary_y=True,
@@ -1351,7 +1632,7 @@ rank_fig.update_layout(
     bargroupgap=0.30,
 )
 rank_fig.update_xaxes(
-    title="SKU rank, sales high to low",
+    title=f"SKU rank, sorted by {rank_by}",
     tickangle=-45,
     tickfont=dict(size=9, color="#4b5563"),
     showgrid=False,
@@ -1386,8 +1667,21 @@ render_responsive_plotly_chart(
 )
 
 with st.expander("Filtered SKU data", expanded=False):
-    display = filtered.copy()
+    display_columns = [
+        "Flavor Description",
+        "Size",
+        "Category",
+        "Net Value 6M",
+        "GP%",
+        "GP amount",
+        "CVM",
+        "Rationalization Score",
+        "Rationalization Status",
+    ]
+    display = filtered[display_columns].copy()
     display["GP%"] = display["GP%"].map(lambda value: f"{value:.1%}")
     display["Net Value 6M"] = display["Net Value 6M"].map(lambda value: f"{value:,.0f}")
     display["GP amount"] = display["GP amount"].map(lambda value: f"{value:,.0f}")
+    display["CVM"] = display["CVM"].map(lambda value: f"{value:.1f}" if pd.notna(value) else "-")
+    display["Rationalization Score"] = display["Rationalization Score"].map(lambda value: f"{value:.1f}")
     st.dataframe(display, width="stretch", hide_index=True)
