@@ -48,32 +48,7 @@ COLUMN_ALIASES = {
     "GP%": ["GP%", "Gross Profit %", "GP Percent", "Gross Margin %", "Margin %", "GP"],
 }
 
-INCLUDED_CATEGORIES = [
-    "FJ 100%",
-    "VJ 100%",
-    "Cool 40%",
-    "Super Kid",
-    "Squeeze",
-    "Aura",
-    "Aquare",
-    "OEM",
-    "OEM - S&P",
-    "Essence",
-    "FOOD SERVICE TRADE",
-    "Consumer product - Food",
-]
-
-EXCLUDED_CATEGORIES = [
-    "Tipco Play",
-    "Less Sweet",
-    "Tipco Chewy",
-    "Canned Fruit",
-    "CEREAL BEVERAGE",
-    "Gift set",
-    "Herb Product",
-]
-
-COLOR_MAP = {
+BASE_COLOR_MAP = {
     "FJ 100%": "#27496d",
     "VJ 100%": "#2f7d73",
     "Cool 40%": "#9b7a3c",
@@ -87,6 +62,28 @@ COLOR_MAP = {
     "FOOD SERVICE TRADE": "#5b6d8b",
     "Consumer product - Food": "#7d735d",
 }
+
+PREMIUM_COLOR_SEQUENCE = [
+    "#27496d",
+    "#2f7d73",
+    "#9b7a3c",
+    "#6f638f",
+    "#9a5f5a",
+    "#3f6f99",
+    "#40878d",
+    "#6f7d86",
+    "#46566f",
+    "#8a5a68",
+    "#5b6d8b",
+    "#7d735d",
+    "#38556f",
+    "#55706d",
+    "#756c8b",
+    "#8a6f55",
+    "#637487",
+    "#53616f",
+    "#7a6872",
+]
 
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -628,16 +625,26 @@ def clean_data(raw: pd.DataFrame) -> pd.DataFrame:
     data["Flavor Description"] = data["Flavor Description"].astype(str).str.strip()
     data["Size"] = data["Size"].astype(str).str.strip()
     data["Category"] = data["Category"].map(normalize_category)
+    sales_text = data["Net Value 6M"].astype(str).str.strip()
     data["Net Value 6M"] = to_number(data["Net Value 6M"])
+    data.loc[sales_text.eq("-"), "Net Value 6M"] = 0
     data["GP%"] = to_percentage(data["GP%"])
 
-    data = data[data["Category"].isin(INCLUDED_CATEGORIES)]
-    data = data[~data["Category"].isin(EXCLUDED_CATEGORIES)]
     data = data.dropna(subset=REQUIRED_COLUMNS)
     data = data[data["Flavor Description"].ne("")]
     data = data.drop_duplicates()
 
     return data.sort_values(["Category", "Net Value 6M"], ascending=[True, False]).reset_index(drop=True)
+
+
+def build_color_map(categories: list[str]) -> dict[str, str]:
+    return {
+        category: BASE_COLOR_MAP.get(
+            category,
+            PREMIUM_COLOR_SEQUENCE[index % len(PREMIUM_COLOR_SEQUENCE)],
+        )
+        for index, category in enumerate(categories)
+    }
 
 
 def header_score(row: pd.Series) -> int:
@@ -668,15 +675,24 @@ def best_excel_table(file_obj) -> pd.DataFrame:
     return pd.read_excel(file_obj, sheet_name=best_sheet, header=best_header)
 
 
+def best_csv_table(file_obj) -> pd.DataFrame:
+    raw = pd.read_csv(file_obj, header=None, dtype=object, encoding="utf-8-sig")
+    scores = raw.apply(header_score, axis=1)
+    best_header = int(scores.idxmax())
+    table = raw.iloc[best_header + 1 :].copy()
+    table.columns = raw.iloc[best_header].astype(str).str.strip().tolist()
+    return table
+
+
 def read_raw_upload(uploaded_file) -> pd.DataFrame:
     suffix = Path(uploaded_file.name).suffix.lower()
     if suffix == ".csv":
-        return pd.read_csv(uploaded_file)
+        return best_csv_table(uploaded_file)
     return best_excel_table(uploaded_file)
 
 
 def load_default_data(path_text: str) -> pd.DataFrame:
-    return clean_data(pd.read_csv(path_text))
+    return clean_data(best_csv_table(path_text))
 
 
 def format_money(value: float) -> str:
@@ -973,9 +989,8 @@ with st.sidebar:
     st.markdown(f'<div class="source-note">{source_status}</div>', unsafe_allow_html=True)
     search_term = st.text_input("SKU search", placeholder="Type product or flavor name")
 
-category_options = [
-    category for category in INCLUDED_CATEGORIES if category in df["Category"].unique()
-]
+category_options = sorted(df["Category"].dropna().unique().tolist())
+color_map = build_color_map(category_options)
 category_options_signature = "|".join(category_options)
 if st.session_state["last_category_options_signature"] != category_options_signature:
     st.session_state["selected_categories"] = []
@@ -1107,7 +1122,7 @@ fig = px.scatter(
     x="Net Value 6M",
     y="GP%",
     color="Category",
-    color_discrete_map=COLOR_MAP,
+    color_discrete_map=color_map,
     size="Net Value 6M",
     size_max=22,
     hover_data={
