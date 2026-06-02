@@ -27,6 +27,8 @@ REQUIRED_NON_NULL_COLUMNS = [
 SALES_WEIGHT = 0.40
 GP_AMOUNT_WEIGHT = 0.40
 CVM_WEIGHT = 0.20
+HIGH_STOCK_COVER_THRESHOLD = 1.0
+EXTREME_CVM_THRESHOLD = 36.0
 
 FIELD_LABELS = {
     "Flavor Description": "SKU / Product Name",
@@ -802,6 +804,44 @@ def add_rationalization_metrics(data: pd.DataFrame) -> pd.DataFrame:
     return scored
 
 
+def review_flag(row: pd.Series, median_sales: float, median_gp_amount: float) -> str:
+    cvm = row["CVM"]
+    low_sales = row["Net Value 6M"] < median_sales
+    low_gp_amount = row["GP amount"] < median_gp_amount
+    high_stock_cover = pd.notna(cvm) and cvm > HIGH_STOCK_COVER_THRESHOLD
+
+    if pd.isna(cvm) or cvm > EXTREME_CVM_THRESHOLD:
+        return "Data Check Needed"
+    if low_sales and low_gp_amount and high_stock_cover:
+        return "Low Sales / Low GP Amount / High Stock Cover"
+    if low_sales and low_gp_amount:
+        return "Low Sales / Low GP Amount"
+    if low_sales and high_stock_cover:
+        return "Low Sales / High Stock Cover"
+    if low_gp_amount and high_stock_cover:
+        return "Low GP Amount / High Stock Cover"
+    if high_stock_cover:
+        return "High Stock Cover"
+    if low_sales:
+        return "Low Sales"
+    if low_gp_amount:
+        return "Low GP Amount"
+    return "No Flag"
+
+
+def add_review_flags(data: pd.DataFrame) -> pd.DataFrame:
+    reviewed = data.copy()
+    median_sales = reviewed["Net Value 6M"].median()
+    median_gp_amount = reviewed["GP amount"].median()
+    reviewed["Review Flag"] = reviewed.apply(
+        review_flag,
+        axis=1,
+        median_sales=median_sales,
+        median_gp_amount=median_gp_amount,
+    )
+    return reviewed
+
+
 def image_data_uri(path: Path) -> str:
     if not path.exists():
         return ""
@@ -1165,6 +1205,7 @@ if search_term:
     ]
 if not filtered.empty:
     filtered = add_rationalization_metrics(filtered)
+    filtered = add_review_flags(filtered)
     filtered["CVM Label"] = filtered["CVM"].map(
         lambda value: f"{value:.1f} months" if pd.notna(value) else "Not available"
     )
@@ -1216,29 +1257,6 @@ with kpi_3:
     render_kpi_card("Number of SKUs", f"{sku_count:,}", "Active filtered items")
 with kpi_4:
     render_kpi_card("Selected Category", selected_category_label, "Current strategic lens")
-
-quartile_counts = filtered["Score Quartile"].value_counts()
-status_1, status_2, status_3, status_4 = st.columns(4)
-with status_1:
-    render_kpi_card("Top Quartile Count", f"{quartile_counts.get('Top Quartile', 0):,}", "Highest score band")
-with status_2:
-    render_kpi_card(
-        "Upper-Middle Count",
-        f"{quartile_counts.get('Upper-Middle Quartile', 0):,}",
-        "Second score band",
-    )
-with status_3:
-    render_kpi_card(
-        "Lower-Middle Count",
-        f"{quartile_counts.get('Lower-Middle Quartile', 0):,}",
-        "Third score band",
-    )
-with status_4:
-    render_kpi_card(
-        "Bottom Quartile Count",
-        f"{quartile_counts.get('Bottom Quartile', 0):,}",
-        "Lowest score band",
-    )
 
 analysis_view = st.pills(
     "Analysis View",
@@ -1528,7 +1546,7 @@ st.markdown(
 
 rank_by = st.pills(
     "Rank By",
-    ["Sales", "GP%", "GP Amount", "CVM", "Portfolio Score"],
+    ["Sales", "GP%", "GP Amount"],
     default="Sales",
     selection_mode="single",
     width="content",
@@ -1550,8 +1568,6 @@ rank_rules = {
     "Sales": ("Net Value 6M", False),
     "GP%": ("GP%", False),
     "GP Amount": ("GP amount", False),
-    "CVM": ("CVM", True),
-    "Portfolio Score": ("Rationalization Score", False),
 }
 rank_column, rank_ascending = rank_rules[rank_by]
 ranked = filtered.sort_values(rank_column, ascending=rank_ascending).reset_index(drop=True).copy()
@@ -1689,6 +1705,67 @@ render_responsive_plotly_chart(
     mobile_height=300,
 )
 
+st.markdown('<div class="chart-section-title">SKU Review Priority</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="chart-section-note">Ranked list of SKUs for portfolio review based on sales, GP amount, and CVM stock cover.</div>',
+    unsafe_allow_html=True,
+)
+
+review_filter = st.pills(
+    "Review Priority Filter",
+    ["All", "Bottom Quartile", "High Stock Cover", "Low Sales", "Low GP Amount"],
+    default="All",
+    selection_mode="single",
+    width="content",
+)
+review_filter = review_filter or "All"
+
+review_data = filtered.copy()
+review_median_sales = review_data["Net Value 6M"].median()
+review_median_gp_amount = review_data["GP amount"].median()
+
+if review_filter == "Bottom Quartile":
+    review_data = review_data[review_data["Score Quartile"].eq("Bottom Quartile")]
+elif review_filter == "High Stock Cover":
+    review_data = review_data[review_data["CVM"].gt(HIGH_STOCK_COVER_THRESHOLD)]
+elif review_filter == "Low Sales":
+    review_data = review_data[review_data["Net Value 6M"].lt(review_median_sales)]
+elif review_filter == "Low GP Amount":
+    review_data = review_data[review_data["GP amount"].lt(review_median_gp_amount)]
+
+review_columns = [
+    "Flavor Description",
+    "Category",
+    "Size",
+    "Net Value 6M",
+    "GP%",
+    "GP amount",
+    "CVM",
+    "Rationalization Score",
+    "Score Quartile",
+    "Review Flag",
+]
+review_display = (
+    review_data[review_columns]
+    .sort_values("Rationalization Score", ascending=True)
+    .rename(
+        columns={
+            "Flavor Description": "SKU / Flavor",
+            "GP amount": "GP Amount",
+            "Rationalization Score": "Portfolio Score",
+        }
+    )
+    .reset_index(drop=True)
+)
+review_display["Net Value 6M"] = review_display["Net Value 6M"].map(lambda value: f"{value:,.0f}")
+review_display["GP%"] = review_display["GP%"].map(lambda value: f"{value:.1%}")
+review_display["GP Amount"] = review_display["GP Amount"].map(lambda value: f"{value:,.0f}")
+review_display["CVM"] = review_display["CVM"].map(lambda value: f"{value:.1f}" if pd.notna(value) else "-")
+review_display["Portfolio Score"] = review_display["Portfolio Score"].map(lambda value: f"{value:.1f}")
+
+st.caption(f"Review table SKUs: {len(review_display):,}")
+st.dataframe(review_display, width="stretch", hide_index=True)
+
 with st.expander("Filtered SKU data", expanded=False):
     display_columns = [
         "Flavor Description",
@@ -1700,6 +1777,7 @@ with st.expander("Filtered SKU data", expanded=False):
         "CVM",
         "Rationalization Score",
         "Score Quartile",
+        "Review Flag",
     ]
     display = filtered[display_columns].copy()
     display["GP%"] = display["GP%"].map(lambda value: f"{value:.1%}")
