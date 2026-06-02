@@ -28,21 +28,21 @@ The dashboard is used for FMCG beverage portfolio analysis in Thailand.
 
 
 
-The main business objective is to identify:
+The main business objective is to help management review portfolio patterns using neutral clusters:
 
 
 
-\* Strong SKUs to grow
+\* Top Quartile
 
-\* SKUs to maintain
+\* Upper-Middle Quartile
 
-\* SKUs to watch
+\* Lower-Middle Quartile
 
-\* SKUs that may require rationalization review
+\* Bottom Quartile
 
 
 
-Do not treat rationalization output as an automatic delisting decision. It is a decision-support tool only.
+Do not treat cluster output as an automatic action decision. It is a decision-support tool only.
 
 
 
@@ -208,21 +208,7 @@ Use plain quadrant descriptions such as:
 
 
 
-Avoid consultant-style labels like:
-
-
-
-\* Star SKU
-
-\* Niche SKU
-
-\* Inventory Optimization
-
-\* Rationalization Candidate
-
-
-
-unless explicitly requested.
+Avoid recommendation-style labels unless explicitly requested.
 
 
 
@@ -274,7 +260,7 @@ CVM score must be inverted before weighting.
 
 
 
-\## Rationalization Status
+\## Score Quartile
 
 
 
@@ -282,17 +268,17 @@ Classify SKUs dynamically by score percentile:
 
 
 
-\* Top 25% = Grow
+\* Top 25% = Top Quartile
 
-\* 25% to 50% = Maintain
+\* 25% to 50% = Upper-Middle Quartile
 
-\* 50% to 75% = Watchlist
+\* 50% to 75% = Lower-Middle Quartile
 
-\* Bottom 25% = Rationalize
+\* Bottom 25% = Bottom Quartile
 
 
 
-These labels are screening outputs only, not final business decisions.
+Use neutral cluster and quartile language only. Do not use recommendation-style status labels for these score bands.
 
 
 

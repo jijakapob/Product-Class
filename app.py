@@ -788,10 +788,15 @@ def add_rationalization_metrics(data: pd.DataFrame) -> pd.DataFrame:
     ).round(1)
 
     rank_pct = scored["Rationalization Score"].rank(method="first", ascending=False) / len(scored)
-    scored["Rationalization Status"] = pd.cut(
+    scored["Score Quartile"] = pd.cut(
         rank_pct,
         bins=[0, 0.25, 0.50, 0.75, 1.0],
-        labels=["GROW", "MAINTAIN", "WATCHLIST", "RATIONALIZE"],
+        labels=[
+            "Top Quartile",
+            "Upper-Middle Quartile",
+            "Lower-Middle Quartile",
+            "Bottom Quartile",
+        ],
         include_lowest=True,
     ).astype(str)
     return scored
@@ -1171,7 +1176,10 @@ weighted_gp_label = "-" if pd.isna(weighted_gp) else f"{weighted_gp:.1%}"
 with st.sidebar:
     st.caption(f"Selected SKU count: {len(filtered):,}")
     if not filtered.empty:
-        export_csv = filtered.to_csv(index=False).encode("utf-8-sig")
+        export_data = filtered.drop(columns=["CVM Label"], errors="ignore").rename(
+            columns={"Rationalization Score": "Portfolio Score"}
+        )
+        export_csv = export_data.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             "Export filtered data",
             data=export_csv,
@@ -1209,16 +1217,28 @@ with kpi_3:
 with kpi_4:
     render_kpi_card("Selected Category", selected_category_label, "Current strategic lens")
 
-status_counts = filtered["Rationalization Status"].value_counts()
+quartile_counts = filtered["Score Quartile"].value_counts()
 status_1, status_2, status_3, status_4 = st.columns(4)
 with status_1:
-    render_kpi_card("Grow SKU Count", f"{status_counts.get('GROW', 0):,}", "Top quartile score")
+    render_kpi_card("Top Quartile Count", f"{quartile_counts.get('Top Quartile', 0):,}", "Highest score band")
 with status_2:
-    render_kpi_card("Maintain SKU Count", f"{status_counts.get('MAINTAIN', 0):,}", "Stable performers")
+    render_kpi_card(
+        "Upper-Middle Count",
+        f"{quartile_counts.get('Upper-Middle Quartile', 0):,}",
+        "Second score band",
+    )
 with status_3:
-    render_kpi_card("Watchlist SKU Count", f"{status_counts.get('WATCHLIST', 0):,}", "Needs review")
+    render_kpi_card(
+        "Lower-Middle Count",
+        f"{quartile_counts.get('Lower-Middle Quartile', 0):,}",
+        "Third score band",
+    )
 with status_4:
-    render_kpi_card("Rationalize SKU Count", f"{status_counts.get('RATIONALIZE', 0):,}", "Bottom quartile score")
+    render_kpi_card(
+        "Bottom Quartile Count",
+        f"{quartile_counts.get('Bottom Quartile', 0):,}",
+        "Lowest score band",
+    )
 
 analysis_view = st.pills(
     "Analysis View",
@@ -1251,27 +1271,27 @@ view_config = {
     },
     "Sales vs CVM": {
         "title": "Sales vs Inventory Efficiency (CVM)",
-        "purpose": "Inventory Productivity Analysis. Lower CVM indicates faster inventory turnover and better inventory efficiency",
+        "purpose": "Inventory Productivity Analysis. CVM values above 3 are capped visually for chart readability; actual values remain in tooltip and export",
         "plot_title": "Sales Value vs CVM Stock Cover",
         "x": "Net Value 6M",
         "y": "CVM",
         "x_title": "Sales Value / Net Value 6M",
-        "y_title": "Stock Cover (Months) - Lower is Better",
+        "y_title": "Stock Cover (Months)",
         "x_tickformat": ",.0f",
         "y_tickformat": ".1f",
         "reverse_y": False,
     },
     "GP% vs CVM": {
         "title": "GP% vs CVM",
-        "purpose": "Profitability + Inventory Efficiency Analysis",
+        "purpose": "Profitability + Inventory Efficiency Analysis. CVM values above 3 are capped visually for chart readability; actual values remain in tooltip and export",
         "plot_title": "Gross Profit % vs CVM Stock Cover",
         "x": "GP%",
         "y": "CVM",
         "x_title": "GP%",
-        "y_title": "CVM stock cover (months, lower is better)",
+        "y_title": "Stock Cover (Months)",
         "x_tickformat": ".0%",
         "y_tickformat": ".1f",
-        "reverse_y": True,
+        "reverse_y": False,
     },
 }
 config = view_config[analysis_view]
@@ -1288,7 +1308,7 @@ if y_column == "CVM":
     cvm_fallback = selected_cvm_median if pd.notna(selected_cvm_median) else default_cvm_median
     if pd.isna(cvm_fallback):
         cvm_fallback = 0
-    chart_data["CVM Plot"] = chart_data["CVM"].fillna(cvm_fallback)
+    chart_data["CVM Plot"] = chart_data["CVM"].fillna(cvm_fallback).clip(lower=0, upper=3)
     plot_y_column = "CVM Plot"
 
 avg_sales = chart_data["Net Value 6M"].mean()
@@ -1319,7 +1339,7 @@ fig = px.scatter(
         "GP amount",
         "CVM Label",
         "Rationalization Score",
-        "Rationalization Status",
+        "Score Quartile",
     ],
     title=config["plot_title"],
 )
@@ -1334,8 +1354,8 @@ fig.update_traces(
         "GP%: %{customdata[4]:.1%}<br>"
         "GP Amount: %{customdata[5]:,.0f}<br>"
         "CVM: %{customdata[6]}<br>"
-        "Rationalization Score: %{customdata[7]:.1f}<br>"
-        "Status: %{customdata[8]}<br>"
+        "Portfolio Score: %{customdata[7]:.1f}<br>"
+        "Score Quartile: %{customdata[8]}<br>"
         "<br><i>CVM measures months of stock cover. Lower values indicate faster sell-through.</i><extra></extra>"
     ),
 )
@@ -1424,10 +1444,10 @@ else:
     y_low = y_min + (median_cvm - y_min) * 0.35 if median_cvm > y_min else y_min
     y_high = median_cvm + (y_max - median_cvm) * 0.45 if y_max > median_cvm else y_max
     quadrant_annotations = [
-        ("KEEP / GROW", x_high, y_low),
-        ("FIX INVENTORY", x_high, y_high),
-        ("WATCH", x_low, y_low),
-        ("RATIONALIZE", x_low, y_high),
+        ("Low GP / High Stock Cover", x_low, y_high),
+        ("High GP / High Stock Cover", x_high, y_high),
+        ("Low GP / Low Stock Cover", x_low, y_low),
+        ("High GP / Low Stock Cover", x_high, y_low),
     ]
 
 for text, x_value, y_value in quadrant_annotations:
@@ -1472,7 +1492,9 @@ fig.update_xaxes(
     zeroline=False,
     range=[x_min - x_padding, x_max + x_padding],
 )
-if config["reverse_y"]:
+if y_column == "CVM":
+    y_axis_range = [0, 3]
+elif config["reverse_y"]:
     y_axis_range = [y_max + y_padding, max(y_min - y_padding, 0)]
 else:
     y_axis_range = [max(y_min - y_padding, -1), min(y_max + y_padding, 1.5) if y_column == "GP%" else y_max + y_padding]
@@ -1506,7 +1528,7 @@ st.markdown(
 
 rank_by = st.pills(
     "Rank By",
-    ["Sales", "GP%", "GP Amount", "CVM", "Rationalization Score"],
+    ["Sales", "GP%", "GP Amount", "CVM", "Portfolio Score"],
     default="Sales",
     selection_mode="single",
     width="content",
@@ -1529,7 +1551,7 @@ rank_rules = {
     "GP%": ("GP%", False),
     "GP Amount": ("GP amount", False),
     "CVM": ("CVM", True),
-    "Rationalization Score": ("Rationalization Score", False),
+    "Portfolio Score": ("Rationalization Score", False),
 }
 rank_column, rank_ascending = rank_rules[rank_by]
 ranked = filtered.sort_values(rank_column, ascending=rank_ascending).reset_index(drop=True).copy()
@@ -1560,7 +1582,7 @@ rank_fig.add_trace(
                 "GP amount",
                 "CVM Label",
                 "Rationalization Score",
-                "Rationalization Status",
+                "Score Quartile",
             ]
         ],
         hovertemplate=(
@@ -1571,8 +1593,8 @@ rank_fig.add_trace(
             "GP%: %{customdata[4]:.1%}<br>"
             "GP Amount: %{customdata[5]:,.0f}<br>"
             "CVM: %{customdata[6]}<br>"
-            "Rationalization Score: %{customdata[7]:.1f}<br>"
-            "Status: %{customdata[8]}<extra></extra>"
+            "Portfolio Score: %{customdata[7]:.1f}<br>"
+            "Score Quartile: %{customdata[8]}<extra></extra>"
         ),
     ),
     secondary_y=False,
@@ -1595,7 +1617,7 @@ rank_fig.add_trace(
                 "GP amount",
                 "CVM Label",
                 "Rationalization Score",
-                "Rationalization Status",
+                "Score Quartile",
             ]
         ],
         hovertemplate=(
@@ -1606,8 +1628,8 @@ rank_fig.add_trace(
             "GP%: %{customdata[4]:.1%}<br>"
             "GP Amount: %{customdata[5]:,.0f}<br>"
             "CVM: %{customdata[6]}<br>"
-            "Rationalization Score: %{customdata[7]:.1f}<br>"
-            "Status: %{customdata[8]}<extra></extra>"
+            "Portfolio Score: %{customdata[7]:.1f}<br>"
+            "Score Quartile: %{customdata[8]}<extra></extra>"
         ),
     ),
     secondary_y=True,
@@ -1677,7 +1699,7 @@ with st.expander("Filtered SKU data", expanded=False):
         "GP amount",
         "CVM",
         "Rationalization Score",
-        "Rationalization Status",
+        "Score Quartile",
     ]
     display = filtered[display_columns].copy()
     display["GP%"] = display["GP%"].map(lambda value: f"{value:.1%}")
@@ -1685,4 +1707,5 @@ with st.expander("Filtered SKU data", expanded=False):
     display["GP amount"] = display["GP amount"].map(lambda value: f"{value:,.0f}")
     display["CVM"] = display["CVM"].map(lambda value: f"{value:.1f}" if pd.notna(value) else "-")
     display["Rationalization Score"] = display["Rationalization Score"].map(lambda value: f"{value:.1f}")
+    display = display.rename(columns={"Rationalization Score": "Portfolio Score"})
     st.dataframe(display, width="stretch", hide_index=True)
