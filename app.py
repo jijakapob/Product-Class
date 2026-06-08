@@ -28,7 +28,6 @@ SALES_WEIGHT = 0.40
 GP_AMOUNT_WEIGHT = 0.40
 CVM_WEIGHT = 0.20
 HIGH_STOCK_COVER_THRESHOLD = 1.0
-EXTREME_CVM_THRESHOLD = 36.0
 
 FIELD_LABELS = {
     "Flavor Description": "SKU / Product Name",
@@ -810,23 +809,14 @@ def review_flag(row: pd.Series, median_sales: float, median_gp_amount: float) ->
     low_gp_amount = row["GP amount"] < median_gp_amount
     high_stock_cover = pd.notna(cvm) and cvm > HIGH_STOCK_COVER_THRESHOLD
 
-    if pd.isna(cvm) or cvm > EXTREME_CVM_THRESHOLD:
-        return "Data Check Needed"
-    if low_sales and low_gp_amount and high_stock_cover:
-        return "Low Sales / Low GP Amount / High Stock Cover"
-    if low_sales and low_gp_amount:
-        return "Low Sales / Low GP Amount"
-    if low_sales and high_stock_cover:
-        return "Low Sales / High Stock Cover"
-    if low_gp_amount and high_stock_cover:
-        return "Low GP Amount / High Stock Cover"
-    if high_stock_cover:
-        return "High Stock Cover"
+    flags = []
     if low_sales:
-        return "Low Sales"
+        flags.append("Low Sales")
     if low_gp_amount:
-        return "Low GP Amount"
-    return "No Flag"
+        flags.append("Low GP Amount")
+    if high_stock_cover:
+        flags.append("High Stock Cover")
+    return " / ".join(flags) if flags else "No Flag"
 
 
 def add_review_flags(data: pd.DataFrame) -> pd.DataFrame:
@@ -838,6 +828,9 @@ def add_review_flags(data: pd.DataFrame) -> pd.DataFrame:
         axis=1,
         median_sales=median_sales,
         median_gp_amount=median_gp_amount,
+    )
+    reviewed["Review Priority Level"] = reviewed["Review Flag"].map(
+        lambda value: 0 if value == "No Flag" else len(str(value).split(" / "))
     )
     return reviewed
 
@@ -1713,7 +1706,7 @@ st.markdown(
 
 review_filter = st.pills(
     "Review Priority Filter",
-    ["All", "Bottom Quartile", "High Stock Cover", "Low Sales", "Low GP Amount"],
+    ["All", "Low Sales", "Low GP Amount", "High Stock Cover"],
     default="All",
     selection_mode="single",
     width="content",
@@ -1724,14 +1717,12 @@ review_data = filtered.copy()
 review_median_sales = review_data["Net Value 6M"].median()
 review_median_gp_amount = review_data["GP amount"].median()
 
-if review_filter == "Bottom Quartile":
-    review_data = review_data[review_data["Score Quartile"].eq("Bottom Quartile")]
-elif review_filter == "High Stock Cover":
-    review_data = review_data[review_data["CVM"].gt(HIGH_STOCK_COVER_THRESHOLD)]
-elif review_filter == "Low Sales":
+if review_filter == "Low Sales":
     review_data = review_data[review_data["Net Value 6M"].lt(review_median_sales)]
 elif review_filter == "Low GP Amount":
     review_data = review_data[review_data["GP amount"].lt(review_median_gp_amount)]
+elif review_filter == "High Stock Cover":
+    review_data = review_data[review_data["CVM"].gt(HIGH_STOCK_COVER_THRESHOLD)]
 
 review_columns = [
     "Flavor Description",
@@ -1741,18 +1732,20 @@ review_columns = [
     "GP%",
     "GP amount",
     "CVM",
-    "Rationalization Score",
-    "Score Quartile",
+    "Review Priority Level",
     "Review Flag",
 ]
 review_display = (
     review_data[review_columns]
-    .sort_values("Rationalization Score", ascending=True)
+    .sort_values(
+        ["Review Priority Level", "Net Value 6M", "GP amount"],
+        ascending=[False, True, True],
+    )
+    .drop(columns=["Review Priority Level"])
     .rename(
         columns={
             "Flavor Description": "SKU / Flavor",
             "GP amount": "GP Amount",
-            "Rationalization Score": "Portfolio Score",
         }
     )
     .reset_index(drop=True)
@@ -1761,7 +1754,6 @@ review_display["Net Value 6M"] = review_display["Net Value 6M"].map(lambda value
 review_display["GP%"] = review_display["GP%"].map(lambda value: f"{value:.1%}")
 review_display["GP Amount"] = review_display["GP Amount"].map(lambda value: f"{value:,.0f}")
 review_display["CVM"] = review_display["CVM"].map(lambda value: f"{value:.1f}" if pd.notna(value) else "-")
-review_display["Portfolio Score"] = review_display["Portfolio Score"].map(lambda value: f"{value:.1f}")
 
 st.caption(f"Review table SKUs: {len(review_display):,}")
 st.dataframe(review_display, width="stretch", hide_index=True)
