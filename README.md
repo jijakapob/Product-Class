@@ -141,3 +141,30 @@ The `localhost:8501` link works only on the computer running Streamlit. It is no
 - [ ] `requirements.txt` is complete
 - [ ] Mobile layout checked
 - [ ] Ready to upload to GitHub or deploy
+
+## New Features (AI Narrator + Scenario Simulator)
+
+### AI Portfolio Narrator
+
+The AI Portfolio Narrator generates a concise executive summary from the current dashboard selection. It uses the filtered category and size view, summarizes sales, GP amount, weighted GP%, CVM observations, and review-priority watchouts, and avoids final decision wording.
+
+### Delist-Potential Scenario Simulator
+
+The Delist-Potential Scenario Simulator models the impact of simulating removal of the top 10, 20, or 30 Review Delist-Potential SKUs from the current filtered portfolio. It shows SKU count, sales, GP amount, weighted GP%, and stock-cover impacts for discussion only.
+
+### Set GEMINI_API_KEY Locally
+
+```bash
+export GEMINI_API_KEY="your-key-here"
+```
+
+### Set GEMINI_API_KEY In Streamlit Cloud
+
+1. Go to App Settings -> Secrets.
+2. Add:
+
+```toml
+GEMINI_API_KEY = "your-key-here"
+```
+
+Simulator calculations work fully without an AI key. AI summaries are optional and only narrate already-calculated dashboard data; they do not invent numbers.

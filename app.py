@@ -1,6 +1,8 @@
 from pathlib import Path
 import base64
 import html
+import json
+import os
 import re
 
 import pandas as pd
@@ -8,6 +10,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 
 APP_TITLE = "Product Class SKU Rationalization Dashboard"
@@ -28,6 +35,8 @@ SALES_WEIGHT = 0.40
 GP_AMOUNT_WEIGHT = 0.40
 CVM_WEIGHT = 0.20
 HIGH_STOCK_COVER_THRESHOLD = 1.0
+EXTREME_CVM_THRESHOLD = 12.0
+GEMINI_MODEL_NAME = "gemini-1.5-flash"
 
 FIELD_LABELS = {
     "Flavor Description": "SKU / Product Name",
@@ -835,6 +844,202 @@ def add_review_flags(data: pd.DataFrame) -> pd.DataFrame:
     return reviewed
 
 
+def get_gemini_api_key() -> str | None:
+    try:
+        key = st.secrets.get("GEMINI_API_KEY", None)
+    except Exception:
+        key = None
+    return key or os.environ.get("GEMINI_API_KEY", None)
+
+
+def call_gemini_summary(context: dict, system_prompt: str) -> str:
+    if genai is None:
+        raise RuntimeError("Gemini package is not installed.")
+    api_key = get_gemini_api_key()
+    if not api_key:
+        raise RuntimeError("Gemini API key is missing.")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+    context_json = json.dumps(context, ensure_ascii=False, default=str)
+    response = model.generate_content(
+        f"{system_prompt}\n\nHere is the portfolio data:\n{context_json}"
+    )
+    return response.text
+
+
+def table_records(data: pd.DataFrame, columns: list[str], limit: int = 10) -> list[dict]:
+    available_columns = [column for column in columns if column in data.columns]
+    return data[available_columns].head(limit).to_dict(orient="records")
+
+
+def build_ai_context(
+    data: pd.DataFrame,
+    selected_categories: list[str],
+    selected_sizes: list[str],
+    available_categories: list[str],
+    available_sizes: list[str],
+) -> dict:
+    cvm_available = "CVM" in data.columns and data["CVM"].notna().any()
+    review_sorted = data.sort_values(
+        ["Review Priority Level", "Net Value 6M", "GP amount"],
+        ascending=[False, True, True],
+    )
+    high_cvm_skus = []
+    missing_cvm_skus = []
+    extreme_cvm_skus = []
+    if "CVM" in data.columns:
+        missing_cvm_skus = table_records(
+            data[data["CVM"].isna()],
+            ["Flavor Description", "Category", "Size", "Net Value 6M", "GP amount", "CVM"],
+        )
+    if cvm_available:
+        high_cvm_skus = table_records(
+            data[data["CVM"].ge(HIGH_STOCK_COVER_THRESHOLD)].sort_values("CVM", ascending=False),
+            ["Flavor Description", "Category", "Size", "Net Value 6M", "GP amount", "CVM"],
+        )
+        extreme_cvm_skus = table_records(
+            data[data["CVM"].gt(EXTREME_CVM_THRESHOLD)].sort_values("CVM", ascending=False),
+            ["Flavor Description", "Category", "Size", "Net Value 6M", "GP amount", "CVM"],
+        )
+    return {
+        "selected_category": "All" if len(selected_categories) == len(available_categories) else selected_categories,
+        "selected_size": "All" if len(selected_sizes) == len(available_sizes) else selected_sizes,
+        "sku_count": int(len(data)),
+        "total_net_value_6m": float(data["Net Value 6M"].sum()),
+        "total_gp_amount": float(data["GP amount"].sum()),
+        "weighted_gp_pct": None if pd.isna(weighted_gp_percent(data)) else float(weighted_gp_percent(data)),
+        "top10_by_net_value": table_records(
+            data.sort_values("Net Value 6M", ascending=False),
+            ["Flavor Description", "Net Value 6M", "GP%"],
+        ),
+        "top10_by_gp_amount": table_records(
+            data.sort_values("GP amount", ascending=False),
+            ["Flavor Description", "GP amount", "GP%"],
+        ),
+        "review_priority_top10": table_records(
+            review_sorted,
+            ["Flavor Description", "Category", "Size", "Net Value 6M", "GP amount", "CVM", "Review Flag"],
+        ),
+        "high_cvm_skus": high_cvm_skus,
+        "missing_cvm_skus": missing_cvm_skus,
+        "outliers": {
+            "negative_gp_pct": table_records(
+                data[data["GP%"].lt(0)],
+                ["Flavor Description", "Category", "Size", "Net Value 6M", "GP%", "GP amount"],
+            ),
+            "zero_gp_amount": table_records(
+                data[data["GP amount"].eq(0)],
+                ["Flavor Description", "Category", "Size", "Net Value 6M", "GP%", "GP amount"],
+            ),
+            "extreme_cvm": extreme_cvm_skus,
+        },
+    }
+
+
+def ai_portfolio_system_prompt() -> str:
+    return """
+You are an executive FMCG portfolio analytics narrator.
+Use only the supplied portfolio data. Do not invent numbers, SKU names, causes, or business facts.
+Respond exactly with these five numbered sections:
+1. Portfolio Snapshot
+2. Sales / Profit Pattern
+3. Stock Cover Observation
+4. SKU Review Watchouts
+5. Suggested Discussion Points
+Use professional, concise business language.
+Do not say "delete this SKU", "must delist", or make final business decisions.
+Use wording such as "appears in the review list", "may require review", "should be checked", "discussion point", and "stock cover needs attention."
+"""
+
+
+def ai_scenario_system_prompt() -> str:
+    return """
+You are an executive FMCG scenario narrator.
+Summarize only the supplied scenario metrics. Do not invent numbers, SKU names, causes, or business facts.
+Use short management language for portfolio review.
+Use wording such as "simulate removing", "review discussion", and "may warrant review."
+Do not say "these SKUs should be deleted", "must delist", or make final business decisions.
+"""
+
+
+def add_delist_potential_score(data: pd.DataFrame) -> pd.DataFrame:
+    scored = data.copy()
+    if scored.empty:
+        scored["Review Delist-Potential Score"] = pd.Series(dtype=float)
+        return scored
+    sales_rank_pct = scored["Net Value 6M"].rank(pct=True, ascending=False)
+    gp_rank_pct = scored["GP amount"].rank(pct=True, ascending=False)
+    cvm_available = "CVM" in scored.columns and scored["CVM"].notna().any()
+    if cvm_available:
+        cvm_rank_pct = scored["CVM"].fillna(scored["CVM"].min()).rank(pct=True, ascending=True)
+        score = sales_rank_pct * 0.40 + gp_rank_pct * 0.40 + cvm_rank_pct * 0.20
+    else:
+        score = sales_rank_pct * 0.50 + gp_rank_pct * 0.50
+    scored["Review Delist-Potential Score"] = score.round(4)
+    return scored
+
+
+def portfolio_metrics(data: pd.DataFrame, cvm_available: bool) -> dict:
+    total_sales = data["Net Value 6M"].sum() if not data.empty else 0
+    total_gp = data["GP amount"].sum() if not data.empty else 0
+    metrics = {
+        "sku_count": int(len(data)),
+        "total_net_value_6m": float(total_sales),
+        "total_gp_amount": float(total_gp),
+        "weighted_gp_pct": None if total_sales == 0 else float(total_gp / total_sales),
+    }
+    if cvm_available:
+        metrics["avg_cvm"] = None if data.empty else float(data["CVM"].mean(skipna=True))
+        metrics["high_stock_cover_count"] = int(data["CVM"].ge(HIGH_STOCK_COVER_THRESHOLD).sum())
+    return metrics
+
+
+def scenario_payload(data: pd.DataFrame, remove_count: int) -> dict:
+    scenario_data = add_delist_potential_score(data).sort_values(
+        "Review Delist-Potential Score", ascending=False
+    )
+    removed = scenario_data.head(min(remove_count, len(scenario_data))).copy()
+    after = scenario_data.drop(index=removed.index).copy()
+    cvm_available = "CVM" in data.columns and data["CVM"].notna().any()
+    before_metrics = portfolio_metrics(scenario_data, cvm_available)
+    removed_metrics = portfolio_metrics(removed, cvm_available)
+    after_metrics = portfolio_metrics(after, cvm_available)
+    before_sales = before_metrics["total_net_value_6m"]
+    before_gp = before_metrics["total_gp_amount"]
+    impact = {
+        "sku_reduction_pct": 0 if before_metrics["sku_count"] == 0 else removed_metrics["sku_count"] / before_metrics["sku_count"] * 100,
+        "sales_impact_pct": 0 if before_sales == 0 else removed_metrics["total_net_value_6m"] / before_sales * 100,
+        "gp_amount_impact_pct": 0 if before_gp == 0 else removed_metrics["total_gp_amount"] / before_gp * 100,
+        "weighted_gp_change_pp": None
+        if before_metrics["weighted_gp_pct"] is None or after_metrics["weighted_gp_pct"] is None
+        else (after_metrics["weighted_gp_pct"] - before_metrics["weighted_gp_pct"]) * 100,
+    }
+    if cvm_available:
+        impact["high_stock_cover_reduction"] = (
+            before_metrics["high_stock_cover_count"] - after_metrics["high_stock_cover_count"]
+        )
+    return {
+        "before": before_metrics,
+        "removed": removed_metrics,
+        "after": after_metrics,
+        "impact": impact,
+        "removed_skus": removed,
+        "cvm_available": cvm_available,
+    }
+
+
+def format_percent(value: float | None) -> str:
+    return "-" if value is None or pd.isna(value) else f"{value:.1%}"
+
+
+def format_pp(value: float | None) -> str:
+    return "-" if value is None or pd.isna(value) else f"{value:+.1f} pp"
+
+
+def format_number(value: float | None, decimals: int = 1) -> str:
+    return "-" if value is None or pd.isna(value) else f"{value:,.{decimals}f}"
+
+
 def image_data_uri(path: Path) -> str:
     if not path.exists():
         return ""
@@ -870,7 +1075,7 @@ def summarize_categories(selected_categories: list[str], available_categories: l
     if not selected_categories:
         return "None"
     if len(selected_categories) == len(available_categories):
-        return "All included categories"
+        return "All categories"
     if len(selected_categories) <= 3:
         return ", ".join(selected_categories)
     return f"{selected_categories[0]}, {selected_categories[1]}, {selected_categories[2]} + {len(selected_categories) - 3} more"
@@ -881,7 +1086,7 @@ def reset_category_state(available_categories: list[str]) -> None:
 
 
 def reset_size_state(available_sizes: list[str]) -> None:
-    st.session_state["selected_sizes"] = []
+    st.session_state["selected_sizes"] = available_sizes.copy()
 
 
 def set_items(state_key: str, items: list[str]) -> None:
@@ -1123,7 +1328,7 @@ category_options = sorted(df["Category"].dropna().unique().tolist())
 color_map = build_color_map(category_options)
 category_options_signature = "|".join(category_options)
 if st.session_state["last_category_options_signature"] != category_options_signature:
-    st.session_state["selected_categories"] = []
+    st.session_state["selected_categories"] = category_options.copy()
     st.session_state["selected_sizes"] = []
     st.session_state["last_category_options_signature"] = category_options_signature
     st.session_state["last_category_signature"] = ""
@@ -1131,6 +1336,13 @@ if st.session_state["last_category_options_signature"] != category_options_signa
 st.session_state["selected_categories"] = [
     category for category in st.session_state["selected_categories"] if category in category_options
 ]
+
+with st.sidebar:
+    st.caption(
+        f"Loaded master data: {len(df):,} SKUs | "
+        f"{df['Category'].nunique():,} categories | "
+        f"{df['Size'].nunique():,} sizes"
+    )
 
 render_pill_selector(
     "STEP 1 — Choose Category",
@@ -1250,6 +1462,35 @@ with kpi_3:
     render_kpi_card("Number of SKUs", f"{sku_count:,}", "Active filtered items")
 with kpi_4:
     render_kpi_card("Selected Category", selected_category_label, "Current strategic lens")
+
+st.markdown('<div class="chart-section-title">AI Portfolio Narrator</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="chart-section-note">Generate a concise executive summary from the current category and size selection.</div>',
+    unsafe_allow_html=True,
+)
+ai_key_available = bool(get_gemini_api_key()) and genai is not None
+if not ai_key_available:
+    st.info(
+        "AI summary is not enabled yet. Please add GEMINI_API_KEY to Streamlit secrets or your local environment."
+    )
+else:
+    if st.button("Generate AI Summary", width="content"):
+        narrator_context = build_ai_context(
+            filtered,
+            selected_categories,
+            selected_sizes,
+            category_options,
+            available_sizes,
+        )
+        try:
+            st.session_state["ai_portfolio_summary"] = call_gemini_summary(
+                narrator_context,
+                ai_portfolio_system_prompt(),
+            )
+        except Exception:
+            st.error("AI summary could not be generated. Please try again.")
+if st.session_state.get("ai_portfolio_summary"):
+    st.markdown(st.session_state["ai_portfolio_summary"])
 
 analysis_view = st.pills(
     "Analysis View",
@@ -1757,6 +1998,150 @@ review_display["CVM"] = review_display["CVM"].map(lambda value: f"{value:.1f}" i
 
 st.caption(f"Review table SKUs: {len(review_display):,}")
 st.dataframe(review_display, width="stretch", hide_index=True)
+
+st.markdown('<div class="chart-section-title">Delist-Potential Scenario Simulator</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="chart-section-note">Scenario simulation for discussion only. Results use the current filtered portfolio and do not represent a final recommendation.</div>',
+    unsafe_allow_html=True,
+)
+
+scenario_option = st.radio(
+    "Scenario",
+    [
+        "Remove Top 10 Review Delist-Potential SKUs",
+        "Remove Top 20 Review Delist-Potential SKUs",
+        "Remove Top 30 Review Delist-Potential SKUs",
+    ],
+    index=0,
+    horizontal=True,
+)
+scenario_count = int(re.search(r"Top (\d+)", scenario_option).group(1))
+scenario = scenario_payload(filtered, scenario_count)
+before_metrics = scenario["before"]
+removed_metrics = scenario["removed"]
+after_metrics = scenario["after"]
+impact_metrics = scenario["impact"]
+cvm_available = scenario["cvm_available"]
+
+scenario_cols = st.columns(5 if cvm_available else 4)
+with scenario_cols[0]:
+    render_kpi_card("SKUs Removed", f"{removed_metrics['sku_count']:,}", "Scenario subset")
+with scenario_cols[1]:
+    render_kpi_card("Sales Impact %", f"{impact_metrics['sales_impact_pct']:.1f}%", "Net Value 6M removed")
+with scenario_cols[2]:
+    render_kpi_card("GP Amount Impact %", f"{impact_metrics['gp_amount_impact_pct']:.1f}%", "GP amount removed")
+with scenario_cols[3]:
+    render_kpi_card("Weighted GP% Change", format_pp(impact_metrics["weighted_gp_change_pp"]), "After minus before")
+if cvm_available:
+    with scenario_cols[4]:
+        render_kpi_card(
+            "High Stock Cover SKU Change",
+            f"-{impact_metrics['high_stock_cover_reduction']:,}",
+            "Count reduction",
+        )
+else:
+    st.caption("CVM data not available")
+
+scenario_rows = [
+    {
+        "Metric": "SKU Count",
+        "Before": f"{before_metrics['sku_count']:,}",
+        "Removed": f"{removed_metrics['sku_count']:,}",
+        "After": f"{after_metrics['sku_count']:,}",
+        "Impact": f"-{impact_metrics['sku_reduction_pct']:.1f}%",
+    },
+    {
+        "Metric": "Net Value 6M",
+        "Before": format_money(before_metrics["total_net_value_6m"]),
+        "Removed": format_money(removed_metrics["total_net_value_6m"]),
+        "After": format_money(after_metrics["total_net_value_6m"]),
+        "Impact": f"-{impact_metrics['sales_impact_pct']:.1f}%",
+    },
+    {
+        "Metric": "GP Amount",
+        "Before": format_money(before_metrics["total_gp_amount"]),
+        "Removed": format_money(removed_metrics["total_gp_amount"]),
+        "After": format_money(after_metrics["total_gp_amount"]),
+        "Impact": f"-{impact_metrics['gp_amount_impact_pct']:.1f}%",
+    },
+    {
+        "Metric": "Weighted GP%",
+        "Before": format_percent(before_metrics["weighted_gp_pct"]),
+        "Removed": format_percent(removed_metrics["weighted_gp_pct"]),
+        "After": format_percent(after_metrics["weighted_gp_pct"]),
+        "Impact": format_pp(impact_metrics["weighted_gp_change_pp"]),
+    },
+]
+if cvm_available:
+    scenario_rows.extend(
+        [
+            {
+                "Metric": "Avg CVM",
+                "Before": format_number(before_metrics["avg_cvm"]),
+                "Removed": format_number(removed_metrics["avg_cvm"]),
+                "After": format_number(after_metrics["avg_cvm"]),
+                "Impact": "-",
+            },
+            {
+                "Metric": "High Stock Cover Count",
+                "Before": f"{before_metrics['high_stock_cover_count']:,}",
+                "Removed": f"{removed_metrics['high_stock_cover_count']:,}",
+                "After": f"{after_metrics['high_stock_cover_count']:,}",
+                "Impact": f"-{impact_metrics['high_stock_cover_reduction']:,}",
+            },
+        ]
+    )
+
+st.dataframe(pd.DataFrame(scenario_rows), width="stretch", hide_index=True)
+
+removed_columns = [
+    "Flavor Description",
+    "Category",
+    "Size",
+    "Net Value 6M",
+    "GP%",
+    "GP amount",
+]
+if cvm_available:
+    removed_columns.append("CVM")
+removed_columns.append("Review Delist-Potential Score")
+removed_display = scenario["removed_skus"][removed_columns].rename(
+    columns={
+        "Flavor Description": "SKU / Flavor",
+        "GP amount": "GP Amount",
+        "Review Delist-Potential Score": "Delist-Potential Score",
+    }
+)
+removed_display["Net Value 6M"] = removed_display["Net Value 6M"].map(lambda value: f"{value:,.0f}")
+removed_display["GP%"] = removed_display["GP%"].map(lambda value: f"{value:.1%}")
+removed_display["GP Amount"] = removed_display["GP Amount"].map(lambda value: f"{value:,.0f}")
+if "CVM" in removed_display.columns:
+    removed_display["CVM"] = removed_display["CVM"].map(lambda value: f"{value:.1f}" if pd.notna(value) else "-")
+removed_display["Delist-Potential Score"] = removed_display["Delist-Potential Score"].map(lambda value: f"{value:.2f}")
+st.dataframe(removed_display.reset_index(drop=True), width="stretch", hide_index=True)
+
+if not ai_key_available:
+    st.info(
+        "AI summary is not enabled yet. Please add GEMINI_API_KEY to Streamlit secrets or your local environment."
+    )
+else:
+    if st.button("Generate AI Scenario Summary", width="content"):
+        scenario_context = {
+            "scenario": scenario_option,
+            "before": before_metrics,
+            "removed": removed_metrics,
+            "after": after_metrics,
+            "impact": impact_metrics,
+        }
+        try:
+            st.session_state["ai_scenario_summary"] = call_gemini_summary(
+                scenario_context,
+                ai_scenario_system_prompt(),
+            )
+        except Exception:
+            st.error("AI summary could not be generated. Please try again.")
+if st.session_state.get("ai_scenario_summary"):
+    st.markdown(st.session_state["ai_scenario_summary"])
 
 with st.expander("Filtered SKU data", expanded=False):
     display_columns = [
