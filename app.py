@@ -12,7 +12,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 try:
-    import google.generativeai as genai
+    from google import genai
 except ImportError:
     genai = None
 
@@ -36,7 +36,7 @@ GP_AMOUNT_WEIGHT = 0.40
 CVM_WEIGHT = 0.20
 HIGH_STOCK_COVER_THRESHOLD = 1.0
 EXTREME_CVM_THRESHOLD = 12.0
-GEMINI_MODEL_NAME = "gemini-1.5-flash"
+GEMINI_MODEL_NAME = "gemini-2.5-flash"
 
 FIELD_LABELS = {
     "Flavor Description": "SKU / Product Name",
@@ -852,19 +852,37 @@ def get_gemini_api_key() -> str | None:
     return key or os.environ.get("GEMINI_API_KEY", None)
 
 
+def safe_gemini_error_type(error: Exception) -> str:
+    text = f"{type(error).__name__} {error}".lower()
+    if "api_key" in text or "api key" in text or "permission" in text or "unauth" in text:
+        return "authentication"
+    if "quota" in text or "rate" in text or "429" in text or "resource exhausted" in text:
+        return "quota_or_rate_limit"
+    if "not found" in text or "404" in text or "model" in text:
+        return "model_or_endpoint"
+    if "blocked" in text or "safety" in text or "finish_reason" in text:
+        return "safety_or_empty_response"
+    if "timeout" in text or "connection" in text or "network" in text:
+        return "network"
+    return "provider_error"
+
+
 def call_gemini_summary(context: dict, system_prompt: str) -> str:
     if genai is None:
         raise RuntimeError("Gemini package is not installed.")
     api_key = get_gemini_api_key()
     if not api_key:
         raise RuntimeError("Gemini API key is missing.")
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+    client = genai.Client(api_key=api_key)
     context_json = json.dumps(context, ensure_ascii=False, default=str)
-    response = model.generate_content(
-        f"{system_prompt}\n\nHere is the portfolio data:\n{context_json}"
+    response = client.models.generate_content(
+        model=GEMINI_MODEL_NAME,
+        contents=f"{system_prompt}\n\nHere is the portfolio data:\n{context_json}",
     )
-    return response.text
+    summary = getattr(response, "text", "") or ""
+    if not summary.strip():
+        raise RuntimeError("Gemini returned an empty response.")
+    return summary
 
 
 def table_records(data: pd.DataFrame, columns: list[str], limit: int = 10) -> list[dict]:
@@ -1487,8 +1505,11 @@ else:
                 narrator_context,
                 ai_portfolio_system_prompt(),
             )
-        except Exception:
-            st.error("AI summary could not be generated. Please try again.")
+        except Exception as error:
+            st.error(
+                "AI summary could not be generated. "
+                f"Safe error type: {safe_gemini_error_type(error)}."
+            )
 if st.session_state.get("ai_portfolio_summary"):
     st.markdown(st.session_state["ai_portfolio_summary"])
 
@@ -2138,8 +2159,11 @@ else:
                 scenario_context,
                 ai_scenario_system_prompt(),
             )
-        except Exception:
-            st.error("AI summary could not be generated. Please try again.")
+        except Exception as error:
+            st.error(
+                "AI summary could not be generated. "
+                f"Safe error type: {safe_gemini_error_type(error)}."
+            )
 if st.session_state.get("ai_scenario_summary"):
     st.markdown(st.session_state["ai_scenario_summary"])
 

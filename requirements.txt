@@ -2,4 +2,4 @@ streamlit>=1.40
 pandas
 plotly
 openpyxl
-google-generativeai
+google-genai
