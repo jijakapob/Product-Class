@@ -38,7 +38,6 @@ HIGH_STOCK_COVER_THRESHOLD = 1.0
 EXTREME_CVM_THRESHOLD = 12.0
 GEMINI_MODEL_FALLBACKS = (
     "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
     "gemini-2.0-flash",
     "gemini-2.5-flash",
 )
@@ -985,6 +984,71 @@ def format_sku_list(data: pd.DataFrame, limit: int = 5) -> str:
     return "; ".join(labels)
 
 
+def compact_sku_records(data: pd.DataFrame, limit: int = 5) -> list[dict]:
+    records = []
+    for _, row in data.head(limit).iterrows():
+        records.append(
+            {
+                "sku": str(row["Flavor Description"]),
+                "category": str(row["Category"]),
+                "size": str(row["Size"]),
+                "sales": round(float(row["Net Value 6M"]), 1),
+                "gp_pct": None if pd.isna(row["GP%"] ) else round(float(row["GP%"]), 4),
+                "gp_amount": round(float(row["GP amount"]), 1),
+                "cvm": None if pd.isna(row["CVM"] ) else round(float(row["CVM"]), 2),
+                "review_flag": str(row.get("Review Flag", "")),
+            }
+        )
+    return records
+
+
+def build_compact_ai_polish_context(
+    data: pd.DataFrame,
+    selected_categories: list[str],
+    selected_sizes: list[str],
+    available_categories: list[str],
+    available_sizes: list[str],
+    calculated_summary: str,
+) -> dict:
+    total_sales = data["Net Value 6M"].sum()
+    weighted_gp = weighted_gp_percent(data)
+    median_sales = data["Net Value 6M"].median()
+    median_gp_amount = data["GP amount"].median()
+    gp_reference = weighted_gp if not pd.isna(weighted_gp) else data["GP%"].median()
+    high_gp_threshold = data["GP%"].quantile(0.75)
+
+    high_sales_high_gp = data[
+        data["Net Value 6M"].ge(median_sales) & data["GP%"].ge(gp_reference)
+    ].sort_values("Net Value 6M", ascending=False)
+    low_sales_high_gp = data[
+        data["Net Value 6M"].lt(median_sales) & data["GP%"].ge(high_gp_threshold)
+    ].sort_values("GP%", ascending=False)
+    margin_pressure = data[
+        data["GP%"].lt(gp_reference) | data["GP amount"].lt(median_gp_amount)
+    ].sort_values(["Review Priority Level", "Net Value 6M", "GP amount"], ascending=[False, False, True])
+    high_stock_cover = data[data["CVM"].gt(HIGH_STOCK_COVER_THRESHOLD)].sort_values("CVM", ascending=False)
+
+    return {
+        "selected_category": "All" if len(selected_categories) == len(available_categories) else selected_categories,
+        "selected_size": "All" if len(selected_sizes) == len(available_sizes) else selected_sizes,
+        "sku_count": int(len(data)),
+        "total_sales": round(float(total_sales), 1),
+        "weighted_gp_pct": None if pd.isna(weighted_gp) else round(float(weighted_gp), 4),
+        "top_5_sales_skus": compact_sku_records(data.sort_values("Net Value 6M", ascending=False), 5),
+        "top_5_high_gp_skus": compact_sku_records(data.sort_values("GP%", ascending=False), 5),
+        "top_5_low_sales_high_gp_niche_skus": compact_sku_records(low_sales_high_gp, 5),
+        "top_5_margin_pressure_or_review_skus": compact_sku_records(margin_pressure, 5),
+        "stock_cover_observation": {
+            "high_stock_cover_threshold_months": HIGH_STOCK_COVER_THRESHOLD,
+            "high_stock_cover_sku_count": int(len(high_stock_cover)),
+            "top_5_high_stock_cover_skus": compact_sku_records(high_stock_cover, 5),
+        },
+        "scenario_summary": "Not selected in the current Portfolio Summary request.",
+        "calculated_summary": calculated_summary,
+        "instruction": "Polish the calculated summary only. Keep output under 350 words.",
+    }
+
+
 def build_rule_based_portfolio_summary(data: pd.DataFrame) -> str:
     if data.empty:
         return "No SKUs are available in the current selection."
@@ -1055,10 +1119,11 @@ Use wording such as "appears in the review list", "may require review", "should 
 
 def ai_polish_system_prompt() -> str:
     return """
-You are polishing a calculated FMCG portfolio summary for an executive dashboard.
-Use only the supplied calculated summary and portfolio context. Do not invent numbers, SKU names, causes, or business facts.
-Keep the same business meaning and the same five-section structure.
-Make the writing concise, polished, and suitable for management review.
+Polish the supplied calculated portfolio summary into a concise executive-style narrative.
+Use only the compact portfolio context provided. Do not invent numbers, SKU names, causes, or business facts.
+Keep the same five sections: Portfolio Snapshot, Sales / Profit Pattern, Stock Cover Observation, SKU Review Watchouts, Suggested Discussion Points.
+Maximum length: 250-350 words.
+Prioritize: sales concentration, weighted GP%, high sales/high GP SKUs, low sales/high GP niche SKUs, margin-pressure or review SKUs, and stock cover observations.
 Do not say "delete this SKU", "must delist", or make final business decisions.
 Use discussion-oriented language such as "may require review", "appears in the review list", and "stock cover needs attention."
 """
@@ -1587,17 +1652,17 @@ if st.button("Generate Portfolio Summary", width="content"):
     st.session_state["ai_portfolio_note"] = "Calculated portfolio summary."
 
     if ai_key_available:
-        narrator_context = build_ai_context(
+        polish_context = build_compact_ai_polish_context(
             filtered,
             selected_categories,
             selected_sizes,
             category_options,
             available_sizes,
+            calculated_summary,
         )
-        narrator_context["calculated_summary"] = calculated_summary
         try:
             st.session_state["ai_portfolio_summary"] = call_gemini_summary(
-                narrator_context,
+                polish_context,
                 ai_polish_system_prompt(),
             )
             st.session_state["ai_portfolio_note"] = "AI-polished from calculated portfolio summary."
