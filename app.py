@@ -1053,6 +1053,17 @@ Use wording such as "appears in the review list", "may require review", "should 
 """
 
 
+def ai_polish_system_prompt() -> str:
+    return """
+You are polishing a calculated FMCG portfolio summary for an executive dashboard.
+Use only the supplied calculated summary and portfolio context. Do not invent numbers, SKU names, causes, or business facts.
+Keep the same business meaning and the same five-section structure.
+Make the writing concise, polished, and suitable for management review.
+Do not say "delete this SKU", "must delist", or make final business decisions.
+Use discussion-oriented language such as "may require review", "appears in the review list", and "stock cover needs attention."
+"""
+
+
 def ai_scenario_system_prompt() -> str:
     return """
 You are an executive FMCG scenario narrator.
@@ -1570,12 +1581,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 ai_key_available = bool(get_gemini_api_key()) and genai is not None
-if not ai_key_available:
-    st.info(
-        "AI summary is not enabled yet. Please add GEMINI_API_KEY to Streamlit secrets or your local environment."
-    )
-else:
-    if st.button("Generate AI Summary", width="content"):
+if st.button("Generate Portfolio Summary", width="content"):
+    calculated_summary = build_rule_based_portfolio_summary(filtered)
+    st.session_state["ai_portfolio_summary"] = calculated_summary
+    st.session_state["ai_portfolio_note"] = "Calculated portfolio summary."
+
+    if ai_key_available:
         narrator_context = build_ai_context(
             filtered,
             selected_categories,
@@ -1583,25 +1594,28 @@ else:
             category_options,
             available_sizes,
         )
+        narrator_context["calculated_summary"] = calculated_summary
         try:
             st.session_state["ai_portfolio_summary"] = call_gemini_summary(
                 narrator_context,
-                ai_portfolio_system_prompt(),
+                ai_polish_system_prompt(),
             )
+            st.session_state["ai_portfolio_note"] = "AI-polished from calculated portfolio summary."
         except Exception as error:
-            error_type = safe_gemini_error_type(error)
-            if error_type == "quota_or_rate_limit":
-                st.warning(
-                    "Gemini AI quota or rate limit was reached. "
-                    "Dashboard calculations are still valid, so a rule-based portfolio summary is shown instead."
+            if safe_gemini_error_type(error) == "quota_or_rate_limit":
+                st.session_state["ai_portfolio_note"] = (
+                    "AI polishing is temporarily unavailable; showing calculated portfolio summary."
                 )
-                st.session_state["ai_portfolio_summary"] = build_rule_based_portfolio_summary(filtered)
             else:
-                st.error(
-                    "AI summary could not be generated. "
-                    f"Safe error type: {error_type}."
+                st.session_state["ai_portfolio_note"] = (
+                    "AI polishing is unavailable; showing calculated portfolio summary."
                 )
+    else:
+        st.session_state["ai_portfolio_note"] = "Showing calculated portfolio summary."
+
 if st.session_state.get("ai_portfolio_summary"):
+    if st.session_state.get("ai_portfolio_note"):
+        st.caption(st.session_state["ai_portfolio_note"])
     st.markdown(st.session_state["ai_portfolio_summary"])
 
 analysis_view = st.pills(
