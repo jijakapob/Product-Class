@@ -36,7 +36,12 @@ GP_AMOUNT_WEIGHT = 0.40
 CVM_WEIGHT = 0.20
 HIGH_STOCK_COVER_THRESHOLD = 1.0
 EXTREME_CVM_THRESHOLD = 12.0
-GEMINI_MODEL_NAME = "gemini-2.5-flash"
+GEMINI_MODEL_FALLBACKS = (
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+)
 
 FIELD_LABELS = {
     "Flavor Description": "SKU / Product Name",
@@ -875,14 +880,28 @@ def call_gemini_summary(context: dict, system_prompt: str) -> str:
         raise RuntimeError("Gemini API key is missing.")
     client = genai.Client(api_key=api_key)
     context_json = json.dumps(context, ensure_ascii=False, default=str)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL_NAME,
-        contents=f"{system_prompt}\n\nHere is the portfolio data:\n{context_json}",
-    )
-    summary = getattr(response, "text", "") or ""
-    if not summary.strip():
-        raise RuntimeError("Gemini returned an empty response.")
-    return summary
+    last_model_error: Exception | None = None
+
+    for model_name in GEMINI_MODEL_FALLBACKS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=f"{system_prompt}\n\nHere is the portfolio data:\n{context_json}",
+            )
+        except Exception as error:
+            if safe_gemini_error_type(error) == "model_or_endpoint":
+                last_model_error = error
+                continue
+            raise
+
+        summary = getattr(response, "text", "") or ""
+        if not summary.strip():
+            raise RuntimeError("Gemini returned an empty response.")
+        return summary
+
+    if last_model_error is not None:
+        raise last_model_error
+    raise RuntimeError("Gemini model endpoint is unavailable.")
 
 
 def table_records(data: pd.DataFrame, columns: list[str], limit: int = 10) -> list[dict]:
