@@ -17,7 +17,7 @@ except ImportError:
     genai = None
 
 
-APP_TITLE = "Product Class SKU Rationalization Dashboard"
+APP_TITLE = "Portfolio Analysis"
 DEFAULT_DATA_FILE = Path("data/default_sales_gp.csv")
 PROFILE_IMAGE_FILE = Path("assets/profile_ji.jpg")
 
@@ -973,6 +973,70 @@ def build_ai_context(
     }
 
 
+def format_sku_list(data: pd.DataFrame, limit: int = 5) -> str:
+    if data.empty:
+        return "No clear SKU cluster in the current selection."
+    labels = []
+    for _, row in data.head(limit).iterrows():
+        labels.append(
+            f"{row['Flavor Description']} ({row['Size']}, {row['Category']}; "
+            f"sales {format_money(row['Net Value 6M'])}; GP {row['GP%']:.1%})"
+        )
+    return "; ".join(labels)
+
+
+def build_rule_based_portfolio_summary(data: pd.DataFrame) -> str:
+    if data.empty:
+        return "No SKUs are available in the current selection."
+
+    total_sales = data["Net Value 6M"].sum()
+    weighted_gp = weighted_gp_percent(data)
+    weighted_gp_text = "-" if pd.isna(weighted_gp) else f"{weighted_gp:.1%}"
+    median_sales = data["Net Value 6M"].median()
+    median_gp_amount = data["GP amount"].median()
+    gp_reference = weighted_gp if not pd.isna(weighted_gp) else data["GP%"].median()
+
+    top_sales = data.sort_values("Net Value 6M", ascending=False).head(5)
+    top_sales_share = 0 if total_sales == 0 else top_sales["Net Value 6M"].sum() / total_sales
+    high_sales_high_gp = data[
+        data["Net Value 6M"].ge(median_sales) & data["GP%"].ge(gp_reference)
+    ].sort_values("Net Value 6M", ascending=False)
+    low_sales_high_gp = data[
+        data["Net Value 6M"].lt(median_sales) & data["GP%"].ge(gp_reference)
+    ].sort_values("GP%", ascending=False)
+    low_gp_pressure = data[
+        data["GP%"].lt(gp_reference) | data["GP amount"].lt(median_gp_amount)
+    ].sort_values(["Net Value 6M", "GP amount"], ascending=[False, True])
+    high_stock_cover = data[data["CVM"].gt(HIGH_STOCK_COVER_THRESHOLD)].sort_values("CVM", ascending=False)
+
+    return f"""
+**Portfolio Snapshot**
+
+Current selection covers {len(data):,} SKUs with total sales of {format_money(total_sales)} and weighted GP% of {weighted_gp_text}. The top 5 SKUs represent {top_sales_share:.1%} of selected sales, indicating the level of sales concentration in this view.
+
+**Sales / Profit Pattern**
+
+High sales / high GP SKUs: {format_sku_list(high_sales_high_gp)}
+
+Low sales / high GP niche SKUs: {format_sku_list(low_sales_high_gp)}
+
+**Stock Cover Observation**
+
+High stock-cover SKUs above {HIGH_STOCK_COVER_THRESHOLD:.1f} month: {len(high_stock_cover):,}. These items may need inventory follow-up, especially where sales contribution is limited.
+
+**SKU Review Watchouts**
+
+Low GP pressure points: {format_sku_list(low_gp_pressure)}
+
+**Suggested Discussion Points**
+
+- Protect and develop SKUs with both sales scale and healthy GP%.
+- Review pricing, cost, promotion, and mix drivers for low GP pressure points.
+- Keep low sales / high GP niche SKUs under portfolio review rather than treating them as automatic removal candidates.
+- Prioritize stock-cover discussion for high CVM SKUs so inventory action is separated from commercial performance.
+""".strip()
+
+
 def ai_portfolio_system_prompt() -> str:
     return """
 You are an executive FMCG portfolio analytics narrator.
@@ -1525,10 +1589,18 @@ else:
                 ai_portfolio_system_prompt(),
             )
         except Exception as error:
-            st.error(
-                "AI summary could not be generated. "
-                f"Safe error type: {safe_gemini_error_type(error)}."
-            )
+            error_type = safe_gemini_error_type(error)
+            if error_type == "quota_or_rate_limit":
+                st.warning(
+                    "Gemini AI quota or rate limit was reached. "
+                    "Dashboard calculations are still valid, so a rule-based portfolio summary is shown instead."
+                )
+                st.session_state["ai_portfolio_summary"] = build_rule_based_portfolio_summary(filtered)
+            else:
+                st.error(
+                    "AI summary could not be generated. "
+                    f"Safe error type: {error_type}."
+                )
 if st.session_state.get("ai_portfolio_summary"):
     st.markdown(st.session_state["ai_portfolio_summary"])
 
